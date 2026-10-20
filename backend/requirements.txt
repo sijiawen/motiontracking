@@ -1,0 +1,5 @@
+# Only needed on your laptop (for deploying and calibrating). The GPU image installs its own.
+modal
+numpy
+opencv-python-headless
+pytest
