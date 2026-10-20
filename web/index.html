@@ -105,7 +105,7 @@
             <li data-step="gpu">Start GPU and load models</li>
             <li data-step="script">Script: transcribe and compare speech</li>
             <li data-step="scene">Scene &amp; visuals</li>
-            <li data-step="body">Body &amp; motion (skipped if a strong match is already found)</li>
+            <li data-step="body">Body &amp; motion</li>
             <li data-step="score">Final score</li>
           </ol>
           <p class="progress-note">Usually 3–5 minutes. You can keep this tab open; the result gets its own link.</p>
@@ -167,7 +167,7 @@
         <li><b>Pointmap</b><span>Relative depth of every pixel of the person: the overall 3D shape.</span></li>
         <li><b>Human matting</b><span>The exact silhouette, including hair and loose clothing.</span></li>
       </ol>
-      <p class="method-note">Each test looks for matched sections rather than one start-to-finish match, so a copy that is trimmed, re-ordered, sped up, mirrored, or only uses a few seconds of the original inside a longer video still lines up, and each section is listed with its timestamps. Each test is calibrated on a labelled set of known copies and unrelated videos, and the final score is the highest of the three. Tests run cheapest first (script, then scene, then body), and once one scores 80% or more the rest are skipped.</p>
+      <p class="method-note">Each test looks for matched sections rather than one start-to-finish match, so a copy that is trimmed, re-ordered, sped up, mirrored, or only uses a few seconds of the original inside a longer video still lines up, and each section is listed with its timestamps. Each test is calibrated on a labelled set of known copies and unrelated videos, and the final score is the highest of the three.</p>
     </section>
 
     <section class="privacy" id="privacy">

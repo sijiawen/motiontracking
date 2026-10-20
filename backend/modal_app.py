@@ -34,7 +34,8 @@ MAX_SECONDS = 60
 MAX_BYTES = 50 * 1024 * 1024
 DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", "0"))  # comparisons per visitor per day; 0 = unlimited
 BATCH = 8
-EARLY_STOP = 0.80  # if a test scores this or more, skip the more expensive ones
+EARLY_STOP_ENABLED = False  # True = skip the more expensive tests once one scores EARLY_STOP+ (saves GPU)
+EARLY_STOP = 0.80
 GPU = "H100"  # 5 x 1B models need ~35 GB; A100-80GB also works
 
 HF_REPOS = {
@@ -510,7 +511,8 @@ class Analyzer:
                 .eq("id", comparison_id).execute()
 
             calib = similarity.load_calibration("/root/calibration/calibration.json")
-            r = self._score_all(vids["a"][0], vids["b"][0], work, progress, calib)
+            r = self._score_all(vids["a"][0], vids["b"][0], work, progress, calib,
+                                early_stop=EARLY_STOP_ENABLED)
             body, scene, script, comb = r["body"], r["scene"], r["script"], r["combined"]
             va, vb = r["videos"]["a"], r["videos"]["b"]
 
