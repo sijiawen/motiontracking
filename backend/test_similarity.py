@@ -81,3 +81,37 @@ def test_empty_frames_skipped():
     fps = [FrameFingerprint(valid=False)] + [person_frame(t, 1) for t in (0, 1, 2)]
     v = stack(fps, K)
     assert list(v["index"]) == [1, 2, 3]
+
+
+def concat(*vids):
+    out = {k: np.concatenate([v[k] for v in vids]) for k in vids[0] if k != "index"}
+    out["index"] = np.arange(sum(len(v["index"]) for v in vids))
+    return out
+
+
+def test_reordered_sections_are_each_found():
+    """B = a later part of A, then new footage, then an earlier part of A.
+    A single start-to-end alignment can't explain this; sections can."""
+    ts = np.arange(0, 30, 0.5)  # 60 frames
+    A = video(7, ts)
+    B = concat(video(7, ts[40:52], shift=20), video(8, ts[:12]), video(7, ts[5:17], scale=0.9))
+    r = run(A, B)
+    secs = sorted(r.sections, key=lambda s: s["b_start"])
+    print([(s["a_start"], s["a_end"], s["b_start"], s["b_end"], round(s["similarity"], 2)) for s in secs])
+    found = [s for s in secs if s["similarity"] > 0.8]
+    assert len(found) == 2
+    s1, s2 = found
+    assert abs(s1["a_start"] - 40) <= 2 and s1["b_start"] <= 2
+    assert abs(s2["a_start"] - 5) <= 2 and abs(s2["b_start"] - 24) <= 2
+    assert r.overall_raw > 0.85
+
+
+def test_short_copied_clip_inside_long_video():
+    ts = np.arange(0, 30, 0.5)
+    A = video(9, ts)
+    B = concat(video(10, ts[:25]), video(9, ts[20:30]), video(11, ts[:25]))
+    other = concat(video(10, ts[:25]), video(12, ts[:10]), video(11, ts[:25]))
+    r, o = run(A, B), run(A, other)
+    print("clip", r.overall_raw, r.sections, "other", o.overall_raw)
+    assert r.overall_raw > o.overall_raw + 0.2
+    assert any(abs(s["a_start"] - 20) <= 2 and abs(s["b_start"] - 25) <= 2 for s in r.sections)

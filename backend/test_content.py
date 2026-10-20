@@ -91,3 +91,13 @@ def test_combine_uses_calibration():
     out = combine({"body": 0.35, "scene": 0.5, "script": 0.1}, calib)
     assert out["driver"] == "body" and abs(out["final"] - 0.75) < 1e-6
     assert out["verdict"] == "Partial or inconclusive match" and out["calibrated"]
+
+
+def test_scene_sections_out_of_order():
+    a = fake_video_embeddings(5, 40, drift=0.15)
+    pick = lambda v, s, e: {k: x[s:e] + 0.03 * rng.normal(size=x[s:e].shape) for k, x in v.items()}  # noqa: E731
+    other = fake_video_embeddings(6, 10, drift=0.15)
+    b = {k: np.concatenate([pick(a, 25, 35)[k], other[k], pick(a, 2, 12)[k]]) for k in a}
+    r = compare_scene(a, b, None)
+    secs = [(s["a_start"], s["b_start"]) for s in r["sections"] if s["similarity"] > 0.8]
+    assert len(secs) == 2 and abs(secs[0][0] - 25) <= 2 and abs(secs[1][0] - 2) <= 2, r["sections"]

@@ -127,7 +127,7 @@
               </div>
             </div>
             <div class="chips" id="chips"></div>
-            <p class="segment" id="segment"></p>
+            <div class="segment" id="segment"></div>
           </div>
           <div class="breakdown">
             <p class="label">Three tests · final score is the highest</p>
@@ -167,7 +167,7 @@
         <li><b>Pointmap</b><span>Relative depth of every pixel of the person: the overall 3D shape.</span></li>
         <li><b>Human matting</b><span>The exact silhouette, including hair and loose clothing.</span></li>
       </ol>
-      <p class="method-note">The two videos are aligned in time, so trimmed, sped-up, slowed-down or left–right mirrored copies still line up. Each test is calibrated on a labelled set of known copies and unrelated videos, and the final score is the highest of the three. Tests run cheapest first (script, then scene, then body), and once one scores 80% or more the rest are skipped.</p>
+      <p class="method-note">Each test looks for matched sections rather than one start-to-finish match, so a copy that is trimmed, re-ordered, sped up, mirrored, or only uses a few seconds of the original inside a longer video still lines up, and each section is listed with its timestamps. Each test is calibrated on a labelled set of known copies and unrelated videos, and the final score is the highest of the three. Tests run cheapest first (script, then scene, then body), and once one scores 80% or more the rest are skipped.</p>
     </section>
 
     <section class="privacy" id="privacy">

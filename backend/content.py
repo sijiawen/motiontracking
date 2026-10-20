@@ -40,6 +40,7 @@ DEFAULT_ANCHORS = {
 }
 DEFAULT_VERDICT = {"match": 0.80, "unrelated": 0.55}
 
+SCENE_SEGMENT_FLOOR = 0.55  # scene frames must beat this similarity to form a matched section
 MIN_PHRASE_WORDS = 4  # shared runs shorter than this are ignored ("i want to")
 MIN_PHRASE_CHARS = 8  # same, for languages written without spaces (CJK)
 MIN_TRANSCRIPT_WORDS = 8  # below this a video "has no script"
@@ -80,27 +81,37 @@ def blank_person(img_bgr: np.ndarray, alpha: np.ndarray | None) -> np.ndarray:
     return out
 
 
-def compare_scene(emb_a: dict, emb_b: dict, emb_b_flipped: dict | None, dtw) -> dict:
-    """Align in time and score. `dtw` is similarity.subsequence_dtw."""
+def compare_scene(emb_a: dict, emb_b: dict, emb_b_flipped: dict | None, dtw=None) -> dict:
+    """Find the matching sections (in any order) and score the strongest one."""
+    from similarity import find_segments, subsequence_dtw
+
     best = None
     options = [(False, emb_b)] + ([(True, emb_b_flipped)] if emb_b_flipped else [])
     for flipped, eb in options:
         S = scene_matrix(emb_a, eb)
-        a_rows = S.shape[0] <= S.shape[1]
-        path = dtw(S if a_rows else S.T)
-        if not a_rows:
-            path = [(j, i) for i, j in path]
-        ia = np.array([p[0] for p in path])
-        ib = np.array([p[1] for p in path])
-        score = float(S[ia, ib].mean())
+        segs = find_segments(S, floor=SCENE_SEGMENT_FLOOR)
+        if segs:
+            top = max(segs, key=lambda g: g["mean"])
+            score, path = top["mean"], [p for g in segs for p in g["path"]]
+        else:  # nothing stands out: align the whole videos
+            a_rows = S.shape[0] <= S.shape[1]
+            path = subsequence_dtw(S if a_rows else S.T)
+            if not a_rows:
+                path = [(j, i) for i, j in path]
+            score = float(np.mean([S[a, b] for a, b in path]))
         if best is None or score > best["raw"] + 0.03:
-            best = {"raw": score, "mirrored": flipped, "ia": ia, "ib": ib,
-                    "timeline": S[ia, ib]}
+            best = {"raw": score, "mirrored": flipped, "path": path, "S": S, "segs": segs}
+    S = best["S"]
     return {
         "raw": best["raw"],
         "mirrored": best["mirrored"],
-        "path": [(int(a), int(b)) for a, b in zip(best["ia"], best["ib"])],
-        "timeline": [round(float(x), 4) for x in best["timeline"]],
+        "path": [(int(a), int(b)) for a, b in best["path"]],
+        "timeline": [round(float(S[a, b]), 4) for a, b in best["path"]],
+        "sections": [{
+            "a_start": min(a for a, _ in g["path"]), "a_end": max(a for a, _ in g["path"]),
+            "b_start": min(b for _, b in g["path"]), "b_end": max(b for _, b in g["path"]),
+            "similarity": round(g["mean"], 4),
+        } for g in best["segs"]],
     }
 
 

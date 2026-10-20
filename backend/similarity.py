@@ -48,6 +48,7 @@ GRID_H, GRID_W = 64, 48  # fingerprint resolution (4:3, same aspect as the model
 KPT_THR = 0.3  # keypoint confidence below this is ignored
 POSE_SIGMA = 0.15  # tolerance for keypoint distance after normalisation
 STEP_PENALTY = 0.10  # DTW cost for a non-diagonal (time-warping) step
+SEGMENT_FLOOR = 0.45  # a section's frames must beat this similarity (and the pair's own 90th percentile)
 MIRROR_MARGIN = 0.05  # flipped B must beat un-flipped B by this much (raw score)
 MIRROR_MIN_SCORE = 0.50  # and reach at least this raw score
 
@@ -340,6 +341,73 @@ def subsequence_dtw(S: np.ndarray, penalty: float = STEP_PENALTY):
     return path[::-1]
 
 
+def find_segments(
+    S: np.ndarray,
+    tau: float | None = None,
+    gap: float = 0.15,
+    min_len: int = 6,
+    max_segments: int = 8,
+    floor: float = 0.0,
+):
+    """Find every stretch where a run of B frames matches a run of A frames,
+    in any order (a copy can be trimmed, re-ordered, mixed with new footage or
+    taken from several parts of the original).
+
+    S is the (N frames of A) x (M frames of B) similarity matrix. This is a
+    Smith-Waterman local alignment: a cell earns (S - tau), so runs of frames
+    that are more similar than `tau` build up, while a single bad frame
+    (a cut, motion blur) only dents the run. Horizontal/vertical steps cost
+    `gap` and allow for speed changes. Each B frame is used by at most one
+    section. Returns sections sorted by B time:
+        [{"path": [(a, b), ...], "mean": float, "len": int}, ...]
+    """
+    n, m = S.shape
+    if tau is None:
+        # "Better than most random frame pairs" for this particular pair
+        tau = max(floor, float(np.percentile(S, 90)))
+    S = S.astype(np.float64).copy()
+    used_b = np.zeros(m, bool)
+    segments = []
+    for _ in range(max_segments):
+        R = np.where(used_b[None, :], -1.0, S - tau)
+        H = np.zeros((n + 1, m + 1))
+        P = np.zeros((n + 1, m + 1), np.int8)  # 0 stop, 1 diag, 2 up, 3 left
+        for i in range(1, n + 1):
+            r = R[i - 1]
+            diag = H[i - 1, :-1] + r
+            up = H[i - 1, 1:] + r - gap
+            row = np.maximum(0, np.maximum(diag, up))
+            prow = np.where(row == 0, 0, np.where(diag >= up, 1, 2))
+            H[i, 1:] = row
+            P[i, 1:] = prow
+            for j in range(1, m + 1):  # left moves need a running pass
+                cand = H[i, j - 1] + r[j - 1] - gap
+                if cand > H[i, j]:
+                    H[i, j] = cand
+                    P[i, j] = 3
+        i, j = np.unravel_index(int(np.argmax(H)), H.shape)
+        if H[i, j] <= 0:
+            break
+        path = []
+        while i > 0 and j > 0 and P[i, j] != 0:
+            path.append((i - 1, j - 1))
+            step = P[i, j]
+            if step == 1:
+                i, j = i - 1, j - 1
+            elif step == 2:
+                i -= 1
+            else:
+                j -= 1
+        path = path[::-1]
+        bs = sorted({b for _, b in path})
+        if len(bs) < min(min_len, m):
+            break  # the best remaining run is too short to be a real section
+        used_b[bs[0] : bs[-1] + 1] = True
+        vals = [S[a, b] for a, b in path]
+        segments.append({"path": path, "mean": float(np.mean(vals)), "len": len(bs)})
+    return sorted(segments, key=lambda g: g["path"][0][1])
+
+
 # --------------------------------------------------------------------------
 # Calibration
 # --------------------------------------------------------------------------
@@ -399,6 +467,7 @@ class CompareResult:
     path: list  # list of (frame index in A, frame index in B), original frame numbers
     timelines: dict  # model -> similarity along the path
     coverage: dict = field(default_factory=dict)
+    sections: list = field(default_factory=list)  # every matched section, by B time
 
 
 def compare(
@@ -416,25 +485,42 @@ def compare(
     for mirrored, Bv in ((False, B), (True, mirror(B, kpt_flip, frame_width_b))):
         mats = {k: SIM_FUNCS[k](A, Bv) for k in MODELS}
         combined = sum(weights[k] * mats[k] for k in MODELS) / total_w
-        a_is_rows = len(A["index"]) <= len(Bv["index"])
-        S = combined if a_is_rows else combined.T
-        path = subsequence_dtw(S)
-        if not a_is_rows:
-            path = [(j, i) for i, j in path]  # back to (a, b)
-        ia = np.array([p[0] for p in path])
-        ib = np.array([p[1] for p in path])
-        score = float(combined[ia, ib].mean())
+        segs = find_segments(combined, floor=SEGMENT_FLOOR)
+        if segs:
+            top = max(segs, key=lambda g: g["mean"])
+            score = top["mean"]
+            path = [p for g in segs for p in g["path"]]
+        else:  # nothing stands out: fall back to aligning the whole videos
+            a_is_rows = len(A["index"]) <= len(Bv["index"])
+            path = subsequence_dtw(combined if a_is_rows else combined.T)
+            if not a_is_rows:
+                path = [(j, i) for i, j in path]
+            score = float(np.mean([combined[a, b] for a, b in path]))
+            top = {"path": path, "mean": score}
         # Only call it mirrored when the flipped version is clearly better AND
         # the match is reasonably strong; between two unrelated videos, one
         # orientation always scores a hair higher by chance.
         if best is None or (score > best[0] + MIRROR_MARGIN and score >= MIRROR_MIN_SCORE):
-            best = (score, mirrored, mats, ia, ib)
+            best = (score, mirrored, mats, path, segs, top)
 
-    overall_raw, mirrored, mats, ia, ib = best
-    raw = {k: float(mats[k][ia, ib].mean()) for k in MODELS}
+    overall_raw, mirrored, mats, path, segs, top = best
+    ia = np.array([p[0] for p in top["path"]])
+    ib = np.array([p[1] for p in top["path"]])
+    raw = {k: float(mats[k][ia, ib].mean()) for k in MODELS}  # in the strongest section
     scores, overall, calibrated = apply_calibration(raw, overall_raw, calib)
 
-    fa, fb = A["index"][ia], B["index"][ib]
+    combined = sum(weights[k] * mats[k] for k in MODELS) / total_w
+    sections = [{
+        "a_start": int(A["index"][min(a for a, _ in g["path"])]),
+        "a_end": int(A["index"][max(a for a, _ in g["path"])]),
+        "b_start": int(B["index"][min(b for _, b in g["path"])]),
+        "b_end": int(B["index"][max(b for _, b in g["path"])]),
+        "similarity": round(float(np.mean([combined[a, b] for a, b in g["path"]])), 4),
+    } for g in segs]
+    pa = np.array([p[0] for p in path])
+    pb = np.array([p[1] for p in path])
+    fa, fb = A["index"][pa], B["index"][pb]
+    ta, tb = A["index"][ia], B["index"][ib]
     return CompareResult(
         overall=overall,
         overall_raw=overall_raw,
@@ -444,9 +530,10 @@ def compare(
         model_scores=scores,
         model_scores_raw=raw,
         path=[(int(a), int(b)) for a, b in zip(fa, fb)],
-        timelines={k: [round(float(x), 4) for x in mats[k][ia, ib]] for k in MODELS},
-        coverage={
-            "a_start": int(fa.min()), "a_end": int(fa.max()),
-            "b_start": int(fb.min()), "b_end": int(fb.max()),
+        timelines={k: [round(float(x), 4) for x in mats[k][pa, pb]] for k in MODELS},
+        coverage={  # the strongest matched section
+            "a_start": int(ta.min()), "a_end": int(ta.max()),
+            "b_start": int(tb.min()), "b_end": int(tb.max()),
         },
+        sections=sections,
     )

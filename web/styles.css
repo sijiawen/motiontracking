@@ -305,3 +305,9 @@ h1 {
   .tests-grid { grid-template-columns: 1fr; }
   .transcripts { grid-template-columns: 1fr; }
 }
+
+.sections-title { display: block; font: 500 11px/1 var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 8px; }
+.sections { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.sections li { display: flex; align-items: center; gap: 10px; font: 13.5px var(--mono); color: var(--ink-2); }
+.sections .arrow { color: var(--muted); }
+.sections b { margin-left: auto; color: var(--ink); font-weight: 500; }

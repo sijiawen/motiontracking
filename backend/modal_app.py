@@ -494,19 +494,27 @@ class Analyzer:
 
             to_t = lambda i: round(i / SAMPLE_FPS, 1)  # noqa: E731
             alignment = {"frames_a": len(va["imgs"]), "frames_b": len(vb["imgs"])}
+            def secs_json(sections):
+                return [{"a_start_s": to_t(x["a_start"]), "a_end_s": to_t(x["a_end"] + 1),
+                         "b_start_s": to_t(x["b_start"]), "b_end_s": to_t(x["b_end"] + 1),
+                         "similarity": x["similarity"]} for x in sections]
+
             if scene:
-                scene_a = [p[0] for p in scene["path"]]
-                scene_b = [p[1] for p in scene["path"]]
+                ss = scene["sections"]
+                top = max(ss, key=lambda x: x["similarity"]) if ss else {
+                    "a_start": min(p[0] for p in scene["path"]), "a_end": max(p[0] for p in scene["path"]),
+                    "b_start": min(p[1] for p in scene["path"]), "b_end": max(p[1] for p in scene["path"])}
                 alignment["scene"] = {
-                    "timeline": scene["timeline"],
-                    "a_start_s": to_t(min(scene_a)), "a_end_s": to_t(max(scene_a)),
-                    "b_start_s": to_t(min(scene_b)), "b_end_s": to_t(max(scene_b)),
+                    "timeline": scene["timeline"], "sections": secs_json(ss),
+                    "a_start_s": to_t(top["a_start"]), "a_end_s": to_t(top["a_end"] + 1),
+                    "b_start_s": to_t(top["b_start"]), "b_end_s": to_t(top["b_end"] + 1),
                 }
             if body:
                 alignment.update({
-                    "a_start_s": to_t(body.coverage["a_start"]), "a_end_s": to_t(body.coverage["a_end"]),
-                    "b_start_s": to_t(body.coverage["b_start"]), "b_end_s": to_t(body.coverage["b_end"]),
+                    "a_start_s": to_t(body.coverage["a_start"]), "a_end_s": to_t(body.coverage["a_end"] + 1),
+                    "b_start_s": to_t(body.coverage["b_start"]), "b_end_s": to_t(body.coverage["b_end"] + 1),
                     "timelines": body.timelines, "path": body.path,
+                    "sections": secs_json(body.sections),
                 })
             SKIP = f"Skipped: another test already scored {int(EARLY_STOP * 100)}%+"
             tests = {

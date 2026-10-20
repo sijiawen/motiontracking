@@ -317,10 +317,22 @@
     $("#chips").innerHTML = chips.join("");
 
     const al = r.alignment || {};
-    const seg = tests.driver === "scene" && al.scene ? al.scene : al;
-    $("#segment").textContent = seg.a_start_s != null && tests.driver !== "script"
-      ? `Best match: A ${fmtTime(seg.a_start_s)}–${fmtTime(seg.a_end_s)} lines up with B ${fmtTime(seg.b_start_s)}–${fmtTime(seg.b_end_s)}.`
-      : "";
+    const visual = tests.driver === "scene" ? "scene" : tests.driver === "body" ? "body"
+      : ((tests.scene || {}).score ?? -1) >= ((tests.body || {}).score ?? -1) ? "scene" : "body";
+    const src = visual === "scene" ? (al.scene || {}) : al;
+    const sections = (src.sections || []).filter((x) => x.b_end_s - x.b_start_s >= 2);
+    if (sections.length) {
+      const label = visual === "scene" ? "Scene & visuals" : "Body & motion";
+      $("#segment").innerHTML = `<span class="sections-title">Matched sections · ${label}</span>
+        <ol class="sections">${sections.slice(0, 6).map((x) => `
+          <li><span>B ${fmtTime(x.b_start_s)}–${fmtTime(x.b_end_s)}</span><span class="arrow">←</span>
+          <span>A ${fmtTime(x.a_start_s)}–${fmtTime(x.a_end_s)}</span><b>${pct(x.similarity)}</b></li>`).join("")}
+        </ol>`;
+    } else {
+      $("#segment").textContent = src.a_start_s != null && tests.driver !== "script"
+        ? `Closest match: A ${fmtTime(src.a_start_s)}–${fmtTime(src.a_end_s)} with B ${fmtTime(src.b_start_s)}–${fmtTime(src.b_end_s)}.`
+        : "";
+    }
 
     $("#breakdown").innerHTML = TESTS.map((t) => {
       const v = (tests[t.key] || {}).score;
@@ -501,7 +513,9 @@
       transcripts: { tokens_a: ta, tokens_b: tb, spans_a: [[12, 31]], spans_b: [[5, 24]], char_level: false },
       model_scores: scores, video_a_duration: 31.5, video_b_duration: 18.0,
       alignment: { a_start_s: 3.0, a_end_s: 20.5, b_start_s: 0, b_end_s: 17.5, timelines,
-        scene: { timeline: timelines.matting.map((v) => Math.min(1, v + 0.05)), a_start_s: 1, a_end_s: 19, b_start_s: 0, b_end_s: 17.5 } },
+        sections: [{ a_start_s: 14, a_end_s: 20.5, b_start_s: 0, b_end_s: 6.5, similarity: 0.91 }, { a_start_s: 3, a_end_s: 9, b_start_s: 9, b_end_s: 15, similarity: 0.88 }],
+        scene: { timeline: timelines.matting.map((v) => Math.min(1, v + 0.05)), a_start_s: 1, a_end_s: 19, b_start_s: 0, b_end_s: 17.5,
+          sections: [{ a_start_s: 14, a_end_s: 21, b_start_s: 0, b_end_s: 7, similarity: 0.96 }, { a_start_s: 2, a_end_s: 9.5, b_start_s: 8.5, b_end_s: 16, similarity: 0.93 }] } },
       frames: { ...frames, scene: sceneFrames },
     };
   }

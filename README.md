@@ -147,7 +147,7 @@ To tweak the analysis without re-running the GPU, change `similarity.py` and run
 2. All five models run on every frame. The **person detector + pose model** follow the largest person in frame. **Face landmarks are excluded** from the pose score because face swaps change them.
 3. Each frame becomes a compact fingerprint, cropped to the person so position and zoom don't matter.
 4. Every frame of A is compared with every frame of B, separately for each model.
-5. **Dynamic time warping** finds the best alignment. This handles trimmed, sped-up, slowed-down copies and dropped frames.
+5. **Matched sections** are found with local alignment (Smith-Waterman): every run of B frames that closely matches a run of A frames, in any order. This handles copies that are trimmed, re-ordered, sped up or slowed down, or that hide a few seconds of the original inside a longer video. Each section is listed with its timestamps, and the test's score is its strongest section.
 6. Everything is repeated with B **mirrored**, and the better orientation is kept.
 7. The final score is a weighted average along the matched path, rescaled by your calibration.
 
