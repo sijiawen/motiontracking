@@ -314,6 +314,11 @@
     if (r.mirrored && score >= 0.55) chips.push(`<span class="chip info" title="Video B matched best after flipping it left–right, a common trick to dodge copy detection">Video B appears mirrored (flipped left–right)</span>`);
     if (!r.calibrated) chips.push(`<span class="chip warn" title="Thresholds haven't been tuned on a labelled test set yet">Uncalibrated preview score</span>`);
     if (r.video_a_duration) chips.push(`<span class="chip">A ${r.video_a_duration.toFixed(1)} s · B ${(r.video_b_duration || 0).toFixed(1)} s</span>`);
+    const pf = (r.alignment || {}).person_frames;
+    if (pf && pf.a_total) {
+      const share = (n, t) => Math.round((100 * n) / Math.max(t, 1));
+      chips.push(`<span class="chip" title="Only moments with a clearly visible person are compared by the body and scene tests">Person on screen: A ${share(pf.a, pf.a_total)}% · B ${share(pf.b, pf.b_total)}% of the video</span>`);
+    }
     $("#chips").innerHTML = chips.join("");
 
     const al = r.alignment || {};

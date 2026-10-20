@@ -46,6 +46,9 @@ DEFAULT_WEIGHTS = {
 
 GRID_H, GRID_W = 64, 48  # fingerprint resolution (4:3, same aspect as the models)
 KPT_THR = 0.3  # keypoint confidence below this is ignored
+# A frame only counts as "has a person" (and is compared at all) when BOTH:
+PERSON_DET_THR = 0.5  # the person detector is at least this confident, and
+PERSON_MIN_AREA = 0.015  # the matting model's person cut-out covers >= 1.5% of the frame
 POSE_SIGMA = 0.15  # tolerance for keypoint distance after normalisation
 STEP_PENALTY = 0.10  # DTW cost for a non-diagonal (time-warping) step
 SEGMENT_FLOOR = 0.45  # a section's frames must beat this similarity (and the pair's own 90th percentile)
@@ -116,6 +119,12 @@ class FrameFingerprint:
     alpha: np.ndarray | None = None  # (GH, GW) float32 in [0, 1]
 
 
+def person_present(det_score: float, alpha: np.ndarray) -> bool:
+    """Is there clearly a person in this frame? Uses the detector's confidence
+    and the size of the matting model's person cut-out."""
+    return det_score >= PERSON_DET_THR and float((alpha > 0.5).mean()) >= PERSON_MIN_AREA
+
+
 def make_fingerprint(
     kpts: np.ndarray | None,
     kpt_scores: np.ndarray | None,
@@ -123,9 +132,11 @@ def make_fingerprint(
     normal: np.ndarray,
     depth: np.ndarray,
     alpha: np.ndarray,
+    person: bool = True,
 ) -> FrameFingerprint:
-    """All dense inputs are full-frame (H, W[, C]) arrays from the models."""
-    box = person_crop_box(alpha)
+    """All dense inputs are full-frame (H, W[, C]) arrays from the models.
+    Frames without a person (person=False) are left out of the comparison."""
+    box = person_crop_box(alpha) if person else None
     if box is None:
         return FrameFingerprint(valid=False)
 

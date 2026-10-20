@@ -152,7 +152,7 @@
       <div class="method-head">
         <p class="eyebrow"><span>Method</span></p>
         <h2>Three tests. If any one matches, it was copied.</h2>
-        <p>Commercial deepfakes swap whatever they need to (the face, the voice, the script or the background) and keep the rest. So we test each part separately and report the strongest match. We sample two frames per second from each video and transcribe its speech.</p>
+        <p>Commercial deepfakes swap whatever they need to (the face, the voice, the script or the background) and keep the rest. So we test each part separately and report the strongest match. We sample two frames per second from each video and transcribe its speech. Only moments where a person is clearly on screen (the person detector is confident and the person cut-out is large enough) are compared visually, so title cards, black frames and empty shots can't create false matches.</p>
       </div>
       <ol class="method-grid tests-grid">
         <li><b>Body &amp; motion</b><span>Five Sapiens2 models track the main person's pose, body parts, 3D shape and silhouette, frame by frame. Catches face swaps over the same performance.</span></li>

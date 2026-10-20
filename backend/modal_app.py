@@ -258,27 +258,37 @@ class Analyzer:
                     outs.append(p.clamp(0, 1).cpu().numpy())
         return outs
 
-    def _main_person_box(self, im):
+    def _detect(self, images):
+        """Largest person in each frame -> list of (box, confidence).
+        confidence is 0 when the detector finds nobody."""
         import cv2
         import numpy as np
         import torch
         from PIL import Image
 
-        rgb = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
-        inp = self.det_proc(images=Image.fromarray(rgb), return_tensors="pt").to(self.device)
-        with torch.no_grad():
-            out = self.det(**inp)
-        res = self.det_proc.post_process_object_detection(
-            out, target_sizes=torch.tensor([rgb.shape[:2]], device=self.device), threshold=0.3
-        )[0]
-        boxes = res["boxes"][res["labels"] == 1].cpu().numpy()
-        if len(boxes) == 0:
-            h, w = im.shape[:2]
-            return np.array([0, 0, w - 1, h - 1], np.float32)
-        areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-        return boxes[int(areas.argmax())]  # largest person = main subject
+        out = []
+        for s in range(0, len(images), BATCH):
+            chunk = images[s : s + BATCH]
+            rgb = [Image.fromarray(cv2.cvtColor(im, cv2.COLOR_BGR2RGB)) for im in chunk]
+            inp = self.det_proc(images=rgb, return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                pred = self.det(**inp)
+            sizes = torch.tensor([im.shape[:2] for im in chunk], device=self.device)
+            res = self.det_proc.post_process_object_detection(pred, target_sizes=sizes, threshold=0.3)
+            for im, r in zip(chunk, res):
+                person = r["labels"] == 1
+                boxes = r["boxes"][person].cpu().numpy()
+                scores = r["scores"][person].cpu().numpy()
+                if len(boxes) == 0:
+                    h, w = im.shape[:2]
+                    out.append((np.array([0, 0, w - 1, h - 1], np.float32), 0.0))
+                    continue
+                areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+                k = int(areas.argmax())  # largest person = main subject
+                out.append((boxes[k], float(scores[k])))
+        return out
 
-    def _pose(self, images):
+    def _pose(self, images, boxes):
         import numpy as np
         import torch
 
@@ -287,8 +297,8 @@ class Analyzer:
         for s in range(0, len(images), BATCH):
             chunk = images[s : s + BATCH]
             datas = []
-            for im in chunk:
-                box = self._main_person_box(im)
+            for k, im in enumerate(chunk):
+                box = boxes[s + k]
                 d = m.pipeline(dict(img=im, bbox=box[None], bbox_score=np.ones(1, np.float32)))
                 datas.append(m.data_preprocessor(d))
             inputs = torch.cat([d["inputs"] for d in datas], 0)
@@ -363,7 +373,8 @@ class Analyzer:
         import content
         import similarity
 
-        res = {"videos": {}, "body": None, "scene": None, "script": None, "skipped": []}
+        res = {"videos": {}, "body": None, "scene": None, "script": None, "skipped": [],
+               "no_person": None, "person_frames": None}
         raw = {"body": None, "scene": None, "script": None}
 
         def done():
@@ -392,16 +403,38 @@ class Analyzer:
             res["skipped"] = ["scene", "body"]
             return done()
 
-        # 2. Scene & visuals (needs the person cut-out from the matting model)
+        # 2. Scene & visuals. Only frames with a person are compared (by both
+        #    this test and the body test); title cards, black frames and empty
+        #    shots would otherwise match each other.
         for side, label in (("a", "Video A"), ("b", "Video B")):
             v = res["videos"][side]
             progress(f"{label}: Scene & visuals")
             v["out"]["matting"] = self._dense("matting", v["imgs"])
+            v["out"]["det"] = self._detect(v["imgs"])
             mattes = [m[3] for m in v["out"]["matting"]]
-            v["emb"] = self._scene_embeddings(v["imgs"], mattes)
-            v["emb_flip"] = self._scene_embeddings(v["imgs"], mattes, flipped=True) if side == "b" else None
-        res["scene"] = content.compare_scene(va["emb"], vb["emb"], vb["emb_flip"], similarity.subsequence_dtw)
-        raw["scene"] = res["scene"]["raw"]
+            v["out"]["person"] = [similarity.person_present(d[1], al)
+                                  for d, al in zip(v["out"]["det"], mattes)]
+            v["idx"] = np.array([i for i, p in enumerate(v["out"]["person"]) if p], int)
+            if len(v["idx"]) >= 2:
+                imgs_p = [v["imgs"][i] for i in v["idx"]]
+                mattes_p = [mattes[i] for i in v["idx"]]
+                v["emb"] = self._scene_embeddings(imgs_p, mattes_p)
+                v["emb_flip"] = (self._scene_embeddings(imgs_p, mattes_p, flipped=True)
+                                 if side == "b" else None)
+        res["person_frames"] = {"a": int(len(va["idx"])), "b": int(len(vb["idx"])),
+                                "a_total": len(va["imgs"]), "b_total": len(vb["imgs"])}
+        missing = [s.upper() for s in ("a", "b") if len(res["videos"][s]["idx"]) < 2]
+        if missing:
+            res["no_person"] = "No person detected in video " + " or ".join(missing)
+            return done()
+        sc = content.compare_scene(va["emb"], vb["emb"], vb["emb_flip"])
+        ia, ib = va["idx"], vb["idx"]  # back to original frame numbers
+        sc["path"] = [(int(ia[a]), int(ib[b])) for a, b in sc["path"]]
+        for x in sc["sections"]:
+            x["a_start"], x["a_end"] = int(ia[x["a_start"]]), int(ia[x["a_end"]])
+            x["b_start"], x["b_end"] = int(ib[x["b_start"]]), int(ib[x["b_end"]])
+        res["scene"] = sc
+        raw["scene"] = sc["raw"]
         if strong():
             res["skipped"] = ["body"]
             return done()
@@ -429,13 +462,14 @@ class Analyzer:
             progress(f"{label}: {render.LABELS[task]}")
             out[task] = self._dense(task, imgs)
         progress(f"{label}: {render.LABELS['pose']}")
-        out["pose_kpts"], out["pose_scores"] = self._pose(imgs)
+        out["pose_kpts"], out["pose_scores"] = self._pose(imgs, [d[0] for d in out["det"]])
 
         fps = []
         for i in range(len(imgs)):
             fps.append(similarity.make_fingerprint(
                 out["pose_kpts"][i][self.body_idx], out["pose_scores"][i][self.body_idx],
                 out["seg"][i], out["normal"][i], out["pointmap"][i], out["matting"][i][3],
+                person=out["person"][i],
             ))
         return fps
 
@@ -493,7 +527,8 @@ class Analyzer:
                 )
 
             to_t = lambda i: round(i / SAMPLE_FPS, 1)  # noqa: E731
-            alignment = {"frames_a": len(va["imgs"]), "frames_b": len(vb["imgs"])}
+            alignment = {"frames_a": len(va["imgs"]), "frames_b": len(vb["imgs"]),
+                         "person_frames": r["person_frames"]}
             def secs_json(sections):
                 return [{"a_start_s": to_t(x["a_start"]), "a_end_s": to_t(x["a_end"] + 1),
                          "b_start_s": to_t(x["b_start"]), "b_end_s": to_t(x["b_end"] + 1),
@@ -522,11 +557,11 @@ class Analyzer:
                 "skipped": r["skipped"],
                 "body": {"score": comb["scores"]["body"], "raw": r["raw"]["body"],
                          "mirrored": bool(body and body.mirrored),
-                         "reason": None if body else SKIP if "body" in r["skipped"]
-                         else "No person detected in both videos"},
+                         "reason": None if body else r["no_person"] or (SKIP if "body" in r["skipped"]
+                         else "No person detected in both videos")},
                 "scene": {"score": comb["scores"]["scene"], "raw": r["raw"]["scene"],
                           "mirrored": bool(scene and scene["mirrored"]),
-                          "reason": None if scene else SKIP},
+                          "reason": None if scene else r["no_person"] or SKIP},
                 "script": {"score": comb["scores"]["script"], "raw": script["raw"],
                            "reason": script.get("reason"),
                            "shared_words": script.get("shared_words", 0)},
@@ -573,7 +608,7 @@ class Analyzer:
             "raw": r["raw"],  # {"body", "scene", "script"}; None where a test couldn't run
             "overall_raw": r["raw"]["body"],
             "models_raw": body.model_scores_raw if body else None,
-            "mirrored": bool(body and body.mirrored) or r["scene"]["mirrored"],
+            "mirrored": bool(body and body.mirrored) or bool(r["scene"] and r["scene"]["mirrored"]),
             "script_reason": r["script"].get("reason"),
         }
 
