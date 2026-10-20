@@ -32,7 +32,7 @@ CKPT_DIR = "/ckpt"  # Modal Volume with model weights
 SAMPLE_FPS = 2  # frames analysed per second of video
 MAX_SECONDS = 60
 MAX_BYTES = 50 * 1024 * 1024
-DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", "5"))
+DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", "0"))  # comparisons per visitor per day; 0 = unlimited
 BATCH = 8
 EARLY_STOP = 0.80  # if a test scores this or more, skip the more expensive ones
 GPU = "H100"  # 5 x 1B models need ~35 GB; A100-80GB also works
@@ -639,7 +639,7 @@ def api():
                 raise HTTPException(400, f"Video {side} must be MP4, MOV, WebM, M4V, AVI or MKV.")
         sb = supabase()
         h = ip_hash(req)
-        if not is_admin(req):
+        if DAILY_LIMIT > 0 and not is_admin(req):
             since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 86400))
             used = sb.table("comparisons").select("id", count="exact").eq("ip_hash", h) \
                 .neq("status", "awaiting_upload").gte("created_at", since).execute().count or 0

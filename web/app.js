@@ -2,7 +2,7 @@
   "use strict";
 
   const CFG = Object.assign(
-    { APP_NAME: "Creatorgen", API_URL: "", SUPABASE_URL: "", SUPABASE_ANON_KEY: "", MAX_SECONDS: 60, MAX_MB: 50, DAILY_LIMIT: 5 },
+    { APP_NAME: "Creatorgen", API_URL: "", SUPABASE_URL: "", SUPABASE_ANON_KEY: "", MAX_SECONDS: 60, MAX_MB: 50, DAILY_LIMIT: 0 },
     window.APP_CONFIG || {}
   );
   const params = new URLSearchParams(location.search);
@@ -43,7 +43,8 @@
   $$("[data-max-seconds]").forEach((n) => (n.textContent = CFG.MAX_SECONDS));
   $$("[data-max-mb]").forEach((n) => (n.textContent = CFG.MAX_MB));
   $("#year").textContent = new Date().getFullYear();
-  $("#quota span").textContent = DEMO ? "Demo mode · sample results" : `${CFG.DAILY_LIMIT} free comparisons per day`;
+  $("#quota span").textContent = DEMO ? "Demo mode · sample results"
+    : CFG.DAILY_LIMIT > 0 ? `${CFG.DAILY_LIMIT} free comparisons per day` : "Free during beta";
 
   const fmtBytes = (b) => (b / 1048576).toFixed(1) + " MB";
   const fmtTime = (s) => {

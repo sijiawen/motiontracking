@@ -137,7 +137,7 @@ To tweak the analysis without re-running the GPU, change `similarity.py` and run
 ## Limits and costs
 
 - **Uploads:** 60 seconds and 50 MB per video. 50 MB is the Supabase free-plan maximum. To raise it, upgrade Supabase to Pro and change `MAX_SECONDS`/`MAX_BYTES` in `modal_app.py`, the bucket limit in `schema.sql`, and `web/config.js`.
-- **Daily limit:** 5 comparisons per visitor per day. Change `DAILY_LIMIT` in `modal_app.py` and `web/config.js`. Your own browser bypasses the limit if it sends the admin key.
+- **Daily limit:** currently unlimited (`DAILY_LIMIT = 0`). To cap it, set a number in `modal_app.py` and `web/config.js`. Your own browser bypasses the limit if it sends the admin key.
 - **GPU cost:** roughly 3–5 minutes of H100 time per comparison (including GPU start-up). A 60 s + 60 s pair is 240 frames × 5 models. At Modal's ~$0.0011/second that's about $0.20–0.35 per comparison. At most 2 GPUs run at once (`max_containers`), and they shut off 2 minutes after the last job.
 - **Free-plan storage:** 1 GB on Supabase. That fills up after roughly 20–40 comparisons of full-size videos, so plan to upgrade or periodically clear old videos.
 
