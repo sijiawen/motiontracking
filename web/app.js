@@ -435,6 +435,13 @@
   }
 
   function examplesHTML(frames, label) {
+    if ((state.current.frames || {}).expired) {
+      return `<div class="expired">
+        <p><b>Example images for this result have been cleared</b> to save storage. The scores above are kept, and the original videos are saved.</p>
+        <button class="btn-ghost" type="button" data-rerun>Regenerate images</button>
+        <span class="hint">Re-runs the comparison from the saved videos (about 3–5 minutes).</span>
+      </div>`;
+    }
     return `<div class="examples">
         ${frames.map((f) => `
           <figure class="example">
@@ -486,6 +493,23 @@
         <div class="timeline">${sparkline(timeline)}<small>Similarity across the matched segment</small></div>
       </div>${examplesHTML(frames, m.label)}`;
   }
+
+  $("#panel").addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("[data-rerun]");
+    if (!btn || !state.current || !state.current.id) return;
+    btn.disabled = true;
+    btn.textContent = "Starting…";
+    try {
+      await api("/rerun", { method: "POST", body: JSON.stringify({ id: state.current.id }) });
+      $("#results").hidden = true;
+      $("#tool").scrollIntoView({ behavior: "smooth", block: "center" });
+      poll(state.current.id);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = "Regenerate images";
+      showError(err.message);
+    }
+  });
 
   $("#again").addEventListener("click", () => {
     $("#results").hidden = true;

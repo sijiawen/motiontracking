@@ -32,6 +32,7 @@ CKPT_DIR = "/ckpt"  # Modal Volume with model weights
 SAMPLE_FPS = 2  # frames analysed per second of video
 MAX_SECONDS = 60
 MAX_BYTES = 50 * 1024 * 1024
+RESULT_IMAGES_DAYS = 7  # example images are deleted after this many days (videos are kept)
 DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", "0"))  # comparisons per visitor per day; 0 = unlimited
 BATCH = 8
 EARLY_STOP_ENABLED = False  # True = skip the more expensive tests once one scores EARLY_STOP+ (saves GPU)
@@ -718,6 +719,31 @@ def fetch_links_then_analyze(comparison_id: str):
         table.update({"status": "error", "error": msg[:500]}).eq("id", comparison_id).execute()
 
 
+# ---------------------------------------------------------------- storage cleanup
+
+
+@app.function(secrets=secrets, schedule=modal.Cron("17 10 * * *"), timeout=900)
+def cleanup_result_images():
+    """Daily: delete the example images of comparisons older than
+    RESULT_IMAGES_DAYS. Uploaded videos and all scores are kept, and anyone
+    can regenerate the images from the result page ("Regenerate images")."""
+    sb = supabase()
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - RESULT_IMAGES_DAYS * 86400))
+    rows = sb.table("comparisons").select("id,frames").eq("status", "done") \
+        .lt("finished_at", cutoff).limit(500).execute().data or []
+    cleaned = 0
+    for r in rows:
+        if not r.get("frames") or r["frames"].get("expired"):
+            continue
+        names = [o["name"] for o in (sb.storage.from_("results").list(r["id"]) or [])]
+        for i in range(0, len(names), 100):
+            sb.storage.from_("results").remove([f"{r['id']}/{n}" for n in names[i:i + 100]])
+        sb.table("comparisons").update({"frames": {"expired": True}}).eq("id", r["id"]).execute()
+        cleaned += 1
+    print(f"Removed example images for {cleaned} comparisons older than {RESULT_IMAGES_DAYS} days")
+    return cleaned
+
+
 web_image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install("supabase>=2.4", "fastapi[standard]")
@@ -832,6 +858,25 @@ def api():
             Analyzer().run.spawn(body.id)
         return {"ok": True, "status": "queued"}
 
+    @web.post("/rerun")
+    def rerun(body: AnalyzeBody):
+        """Run a finished comparison again from its saved videos (regenerates the
+        example images, and picks up any improvements to the scoring)."""
+        sb = supabase()
+        try:
+            row = sb.table("comparisons").select("status,video_a_path,video_b_path") \
+                .eq("id", body.id).single().execute().data
+        except Exception:
+            raise HTTPException(404, "Comparison not found.")
+        if row["status"] in ("queued", "processing"):
+            return {"ok": True, "status": row["status"]}
+        if not (row.get("video_a_path") and row.get("video_b_path")):
+            raise HTTPException(400, "The original videos for this comparison aren't available.")
+        sb.table("comparisons").update({"status": "queued", "stage": "Starting GPU", "progress": 2,
+                                        "error": None}).eq("id", body.id).execute()
+        Analyzer().run.spawn(body.id)
+        return {"ok": True, "status": "queued"}
+
     PUBLIC_FIELDS = (
         "id,created_at,status,stage,progress,error,overall_score,raw_score,calibrated,verdict,"
         "mirrored,model_scores,tests,transcripts,alignment,frames,video_a_name,video_b_name,video_a_duration,"
@@ -847,6 +892,8 @@ def api():
             raise HTTPException(404, "Comparison not found.")
         if row.get("frames"):
             for model, pairs in row["frames"].items():
+                if not isinstance(pairs, list):
+                    continue  # {"expired": true} once the images have been cleaned up
                 for p in pairs:
                     p["url"] = _signed_url(sb, "results", p["path"])
         if row.get("alignment"):
