@@ -561,6 +561,7 @@ class CompareResult:
     timelines: dict  # model -> similarity along the path
     coverage: dict = field(default_factory=dict)
     sections: list = field(default_factory=list)  # every matched section, by B time
+    best_pairs: list = field(default_factory=list)  # each B moment + its best A moment (evidence)
 
 
 def compare(
@@ -603,6 +604,14 @@ def compare(
     scores, overall, calibrated = apply_calibration(raw, overall_raw, calib)
 
     combined = sum(weights[k] * mats[k] for k in MODELS) / total_w
+    # Evidence across the whole video: every moment of B with its best-matching
+    # moment of A (examples are picked from these, not just the sections).
+    best_pairs = []
+    for b in range(combined.shape[1]):
+        a = int(np.argmax(combined[:, b]))
+        best_pairs.append({"a": int(A["index"][a]), "b": int(B["index"][b]),
+                           "similarity": round(float(combined[a, b]), 4),
+                           "models": {k: round(float(mats[k][a, b]), 4) for k in MODELS}})
     sections = [{
         "a_start": int(A["index"][min(a for a, _ in g["path"])]),
         "a_end": int(A["index"][max(a for a, _ in g["path"])]),
@@ -629,4 +638,5 @@ def compare(
             "b_start": int(tb.min()), "b_end": int(tb.max()),
         },
         sections=sections,
+        best_pairs=best_pairs,
     )

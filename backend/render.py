@@ -91,9 +91,13 @@ def pick_examples(path, scores=None, n=EXAMPLES_PER_MODEL, min_gap=3):
         return list(range(len(path)))
     if scores is None:
         return [int(round(x)) for x in np.linspace(len(path) * 0.15, len(path) * 0.85, n)]
-    order = np.argsort(-np.asarray(scores, float))
+    scores = np.asarray(scores, float)
+    order = np.argsort(-scores)
+    floor = 0.75 * scores.max()  # only show strong matches as evidence...
     picks = []
     for i in order:
+        if scores[i] < floor and len(picks) >= 3:  # ...but always show at least 3
+            break
         if all(abs(path[i][1] - path[j][1]) >= min_gap for j in picks):
             picks.append(int(i))
         if len(picks) == n:
@@ -104,27 +108,31 @@ def pick_examples(path, scores=None, n=EXAMPLES_PER_MODEL, min_gap=3):
 def render_examples(sb, cid, res, va, vb, metainfo):
     imgs_a, out_a, _ = va
     imgs_b, out_b, _ = vb
-    overall = np.mean([res.timelines[m] for m in res.timelines], axis=0)
-    picks = pick_examples(res.path, overall)
+    pairs = getattr(res, "best_pairs", None) or [
+        {"a": a, "b": b, "similarity": float(np.mean([res.timelines[m][i] for m in res.timelines])),
+         "models": {m: res.timelines[m][i] for m in res.timelines}}
+        for i, (a, b) in enumerate(res.path)]
+    path = [(p["a"], p["b"]) for p in pairs]
+    picks = pick_examples(path, [p["similarity"] for p in pairs])
     frames = {}
     for model, fn in VIS.items():
         frames[model] = []
-        for n, p in enumerate(picks):
-            ia, ib = res.path[p]
+        for n, i in enumerate(picks):
+            ia, ib = path[i]
             left = _fit(fn(imgs_a[ia], out_a, ia, metainfo))
             right = _fit(fn(imgs_b[ib], out_b, ib, metainfo))
             gap = np.full((OUT_HEIGHT, 6, 3), 255, np.uint8)
             combo = np.concatenate([left, gap, right], 1)
             ok, buf = cv2.imencode(".jpg", combo, [cv2.IMWRITE_JPEG_QUALITY, 84])
-            path = f"{cid}/{model}_{n}.jpg"
+            fpath = f"{cid}/{model}_{n}.jpg"
             sb.storage.from_("results").upload(
-                path, buf.tobytes(), {"content-type": "image/jpeg", "upsert": "true"}
+                fpath, buf.tobytes(), {"content-type": "image/jpeg", "upsert": "true"}
             )
             frames[model].append({
-                "path": path,
+                "path": fpath,
                 "a_time": round(ia / SAMPLE_FPS, 1),
                 "b_time": round(ib / SAMPLE_FPS, 1),
-                "similarity": res.timelines[model][p],
+                "similarity": pairs[i]["models"][model],
             })
     return frames
 
