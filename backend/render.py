@@ -13,7 +13,7 @@ LABELS = {
     "matting": "Human matting",
     "scene": "Scene & visuals",
 }
-EXAMPLES_PER_MODEL = 3
+EXAMPLES_PER_MODEL = 9
 OUT_HEIGHT = 420  # px height of each half of an example image
 SAMPLE_FPS = 2
 
@@ -84,9 +84,9 @@ def _fit(im, h=OUT_HEIGHT):
     return cv2.resize(im, (int(im.shape[1] * h / im.shape[0]), h), interpolation=cv2.INTER_AREA)
 
 
-def pick_examples(path, scores=None, n=EXAMPLES_PER_MODEL, min_gap=4):
+def pick_examples(path, scores=None, n=EXAMPLES_PER_MODEL, min_gap=3):
     """Pick the best-matching moments to show, at least `min_gap` frames
-    (2 s) apart in video B so the examples cover different moments."""
+    (1.5 s) apart in video B so the examples cover different moments."""
     if len(path) <= n:
         return list(range(len(path)))
     if scores is None:
@@ -142,14 +142,17 @@ def _save_pair(sb, cid, name, left, right):
 
 
 def render_scene_examples(sb, cid, scene, imgs_a, imgs_b):
-    """The raw frames the scene test matched, side by side."""
+    """The best background matches across the whole video, side by side."""
+    pairs = scene.get("best_pairs") or [
+        {"a": a, "b": b, "similarity": v} for (a, b), v in zip(scene["path"], scene["timeline"])]
+    path = [(p["a"], p["b"]) for p in pairs]
     out = []
-    for n, p in enumerate(pick_examples(scene["path"], scene.get("moment") or scene["timeline"])):
-        ia, ib = scene["path"][p]
+    for n, i in enumerate(pick_examples(path, [p["similarity"] for p in pairs])):
+        ia, ib = path[i]
         out.append({
             "path": _save_pair(sb, cid, f"scene_{n}", imgs_a[ia], imgs_b[ib]),
             "a_time": round(ia / SAMPLE_FPS, 1),
             "b_time": round(ib / SAMPLE_FPS, 1),
-            "similarity": scene["timeline"][p],
+            "similarity": pairs[i]["similarity"],
         })
     return out

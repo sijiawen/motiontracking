@@ -452,6 +452,15 @@ class Analyzer:
         for x in sc["sections"]:
             x["a_start"], x["a_end"] = int(ia[x["a_start"]]), int(ia[x["a_end"]])
             x["b_start"], x["b_end"] = int(ib[x["b_start"]]), int(ib[x["b_end"]])
+        for x in sc["best_pairs"]:
+            x["a"], x["b"] = int(ia[x["a"]]), int(ib[x["b"]])
+        # show per-frame scene similarity on the same 0-100% scale as the test score
+        anc = content.anchors(calib, "scene")
+        sc["timeline"] = [round(content.to_scale(v, anc), 4) for v in sc["timeline"]]
+        for x in sc["best_pairs"]:
+            x["similarity"] = round(content.to_scale(x["similarity"], anc), 4)
+        for x in sc["sections"]:
+            x["similarity"] = round(content.to_scale(x["similarity"], anc), 4)
         res["scene"] = sc
         raw["scene"] = sc["raw"]
         if strong():

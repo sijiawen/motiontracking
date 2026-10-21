@@ -36,7 +36,7 @@ TEST_LABELS = {
 # Rough starting anchors (raw score -> 0% / 100%) until you calibrate.
 DEFAULT_ANCHORS = {
     "body": {"low": 0.35, "high": 0.85},
-    "scene": {"low": 0.40, "high": 0.85},
+    "scene": {"low": 0.30, "high": 0.70},  # raw ~0.7 = same set, same camera spot
     "script": {"low": 0.05, "high": 0.60},
 }
 DEFAULT_VERDICT = {"match": 0.80, "unrelated": 0.55}
@@ -147,6 +147,16 @@ def compare_scene(emb_a: dict, emb_b: dict, emb_b_flipped: dict | None, dtw=None
     path = [p for g in best["evals"] for p in g["path"]]
     bg = [v for g in best["evals"] for v in g["bg"]]
     Mo = best["Mo"]
+    # Evidence: for every moment of B, its best-matching moment of A and how
+    # well their backgrounds line up (examples are picked from these).
+    eb = emb_b_flipped if best["mirrored"] else emb_b
+    best_pairs = []
+    for b in range(Mo.shape[1]):
+        a = int(np.argmax(Mo[:, b]))
+        v = background_similarity(emb_a["patch"][a], emb_a["mask"][a], eb["patch"][b], eb["mask"][b])
+        if v is not None:
+            best_pairs.append({"a": a, "b": b, "similarity": round(v, 4),
+                               "moment": round(float(Mo[a, b]), 4)})
     return {
         "raw": best["raw"],
         "mirrored": best["mirrored"],
@@ -159,6 +169,7 @@ def compare_scene(emb_a: dict, emb_b: dict, emb_b_flipped: dict | None, dtw=None
             "b_start": int(min(b for _, b in g["path"])), "b_end": int(max(b for _, b in g["path"])),
             "similarity": round(float(g["mean"]), 4),
         } for g in best["segs"]],
+        "best_pairs": best_pairs,
     }
 
 

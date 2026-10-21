@@ -298,7 +298,7 @@ SEG_GROUPS = {
     "right hand": [15],
     "lower body": [5, 8, 9, 10, 12, 13, 14, 17, 18, 19, 21],
 }
-SEG_BLUR = 2.0  # grid cells of tolerance (the grid is 48 cells wide)
+SEG_BLUR = 3.0  # grid cells of tolerance (the grid is 48 cells wide)
 
 
 def _seg_group_maps(seg: np.ndarray) -> np.ndarray:
@@ -332,9 +332,9 @@ def sim_seg(A: dict, B: dict) -> np.ndarray:
         if aa.max() == 0 and bb.max() == 0:
             continue
         ab = a @ b.T
-        tanimoto = ab / np.clip(aa[:, None] + bb[None] - ab, 1e-6, None)
+        dice = 2 * ab / np.clip(aa[:, None] + bb[None], 1e-6, None)  # overlap, 0..1
         area = a.sum(1)[:, None] + b.sum(1)[None]
-        num += area * tanimoto
+        num += area * dice
         den += area
     return (num / np.clip(den, 1e-6, None)).astype(np.float32)
 

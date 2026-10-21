@@ -106,7 +106,7 @@ def test_combine_takes_max_and_skips_missing():
     assert out["final"] == out["scores"]["scene"] == 1.0
     assert out["scores"]["script"] is None
     assert out["verdict"] == "Likely copied content"
-    low = combine({"body": 0.3, "scene": 0.4, "script": 0.0}, None)
+    low = combine({"body": 0.3, "scene": 0.25, "script": 0.0}, None)
     assert low["final"] == 0.0 and low["verdict"] == "Likely unrelated content"
 
 
