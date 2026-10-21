@@ -2,10 +2,11 @@
 The two content tests that sit alongside the Sapiens2 body & motion test,
 plus the logic that combines all three into the final score.
 
-  scene   Do the frames look alike (room, objects, framing, lighting)?
-          Uses DINOv2 image embeddings of each sampled frame, both the full
-          frame and the frame with the person blanked out, so a face swap or
-          body swap over the same footage still matches.
+  scene   Do the backgrounds line up (table, wall, ceiling, props, framing)?
+          Uses DINOv2 patch features: the frame is split into a grid and each
+          background cell is compared with the same spot in the other video,
+          ignoring cells where the person is, so a face or body swap over the
+          same footage still matches.
   script  Did they say the same words? Whisper transcribes both videos and we
           measure how much of the shorter transcript appears in the other as
           shared phrases of 4+ words (exact or near-exact copying).
@@ -35,7 +36,7 @@ TEST_LABELS = {
 # Rough starting anchors (raw score -> 0% / 100%) until you calibrate.
 DEFAULT_ANCHORS = {
     "body": {"low": 0.35, "high": 0.85},
-    "scene": {"low": 0.45, "high": 0.92},
+    "scene": {"low": 0.40, "high": 0.85},
     "script": {"low": 0.05, "high": 0.60},
 }
 DEFAULT_VERDICT = {"match": 0.80, "unrelated": 0.55}
@@ -59,27 +60,43 @@ def cosine_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return (a @ b.T).astype(np.float32)
 
 
-def scene_matrix(emb_a: dict, emb_b: dict) -> np.ndarray:
-    """emb_*: {"full": (T, D), "bg": (T, D)} -> (N, M) similarity in 0..1.
-    Averages the whole-frame and person-removed views."""
-    full = cosine_matrix(emb_a["full"], emb_b["full"])
-    bg = cosine_matrix(emb_a["bg"], emb_b["bg"])
-    return np.clip(0.5 * full + 0.5 * bg, 0, 1)
-
-
-def blank_person(img_bgr: np.ndarray, alpha: np.ndarray | None) -> np.ndarray:
-    """Replace the person (alpha > 0.5, slightly grown) with flat grey, so the
-    embedding describes only the setting."""
+def patch_person_mask(alpha: np.ndarray | None, grid_hw: tuple[int, int]) -> np.ndarray:
+    """Which cells of the image's patch grid contain the person (or are right
+    next to them). alpha: full-frame matting alpha; returns (h, w) bool."""
+    h, w = grid_hw
     if alpha is None:
-        return img_bgr
+        return np.zeros((h, w), bool)
     import cv2
 
-    mask = (alpha > 0.5).astype(np.uint8)
-    k = max(3, int(round(min(mask.shape) * 0.03)) | 1)
-    mask = cv2.dilate(mask, np.ones((k, k), np.uint8)) > 0
-    out = img_bgr.copy()
-    out[mask] = 128
-    return out
+    cover = cv2.resize((alpha > 0.5).astype(np.float32), (w, h), interpolation=cv2.INTER_AREA)
+    m = (cover > 0.05).astype(np.uint8)
+    return cv2.dilate(m, np.ones((3, 3), np.uint8)) > 0  # one-cell margin round the person
+
+
+def background_similarity(pa, ma, pb, mb, shift: int = 1) -> float | None:
+    """How well two frames' backgrounds line up, location by location.
+    pa/pb: (h, w, D) unit-length patch features; ma/mb: (h, w) person masks.
+    For every background cell of A, take the best match among the cells at the
+    same spot in B (+/- `shift` cells, for a slightly moved camera), then
+    average. Cells covered by the person in either frame are ignored, so a
+    swapped person doesn't count against it, but the table, wall, ceiling and
+    props do. Returns None when there's almost no shared background."""
+    h, w, _ = pa.shape
+    best = np.full((h, w), -1.0, np.float32)
+    okb_any = np.zeros((h, w), bool)
+    for dy in range(-shift, shift + 1):
+        for dx in range(-shift, shift + 1):
+            ys, yd = (slice(max(0, -dy), h - max(0, dy)), slice(max(0, dy), h - max(0, -dy)))
+            xs, xd = (slice(max(0, -dx), w - max(0, dx)), slice(max(0, dx), w - max(0, -dx)))
+            sim = (pa[ys, xs] * pb[yd, xd]).sum(-1)
+            okb = ~mb[yd, xd]
+            sim = np.where(okb, sim, -1.0)
+            best[ys, xs] = np.maximum(best[ys, xs], sim)
+            okb_any[ys, xs] |= okb
+    valid = ~ma & okb_any
+    if valid.sum() < 0.1 * h * w:
+        return None
+    return float(np.clip(best[valid], 0, 1).mean())
 
 
 def moment_matrix(emb_a: dict, emb_b: dict) -> np.ndarray:
@@ -88,43 +105,55 @@ def moment_matrix(emb_a: dict, emb_b: dict) -> np.ndarray:
     fingerprints is removed first (subtract the average fingerprint of both
     videos); what's left is what changes from moment to moment: the person's
     posture, what they're holding, what's on the desk."""
-    a, b = emb_a["full"], emb_b["full"]
+    a, b = emb_a["cls"], emb_b["cls"]
     mean = np.concatenate([a, b]).mean(0, keepdims=True)
     return np.clip(cosine_matrix(a - mean, b - mean), 0, 1)
 
 
+def _bg_along(path, ea, eb):
+    vals = [background_similarity(ea["patch"][a], ea["mask"][a], eb["patch"][b], eb["mask"][b])
+            for a, b in path]
+    return [v for v in vals], [v for v in vals if v is not None]
+
+
 def compare_scene(emb_a: dict, emb_b: dict, emb_b_flipped: dict | None, dtw=None) -> dict:
-    """Line up the moments with the moment matrix, then score how alike the
-    matched frames look overall (room, objects, framing, lighting)."""
+    """emb_*: {"cls": (T, D), "patch": (T, h, w, D) unit vectors, "mask": (T, h, w) bool}.
+    1. Line up the moments (moment matrix + section finding).
+    2. Score each matched pair on how well the backgrounds line up, location by
+       location: same table, wall, ceiling, props, framing. The test's score is
+       its strongest section."""
     from similarity import find_segments, subsequence_dtw
 
     best = None
     options = [(False, emb_b)] + ([(True, emb_b_flipped)] if emb_b_flipped else [])
     for flipped, eb in options:
-        S = scene_matrix(emb_a, eb)  # how alike the frames look
-        Mo = moment_matrix(emb_a, eb)  # which moment matches which
+        Mo = moment_matrix(emb_a, eb)
         segs = find_segments(Mo, tau=MOMENT_TAU)
-        if segs:
-            for g in segs:
-                g["mean"] = float(np.mean([S[a, b] for a, b in g["path"]]))
-            top = max(segs, key=lambda g: g["mean"])
-            score, path = top["mean"], [p for g in segs for p in g["path"]]
-        else:  # nothing stands out: align the whole videos
-            a_rows = S.shape[0] <= S.shape[1]
+        if not segs:  # nothing stands out: align the whole videos
+            a_rows = Mo.shape[0] <= Mo.shape[1]
             path = subsequence_dtw(Mo if a_rows else Mo.T)
             if not a_rows:
                 path = [(j, i) for i, j in path]
-            score = float(np.mean([S[a, b] for a, b in path]))
+            segs_eval = [{"path": path}]
+        else:
+            segs_eval = segs
+        for g in segs_eval:
+            g["bg"], ok = _bg_along(g["path"], emb_a, eb)
+            g["mean"] = float(np.mean(ok)) if ok else 0.0
+        top = max(segs_eval, key=lambda g: g["mean"])
+        score = top["mean"]
         if best is None or score > best["raw"] + 0.03:
-            best = {"raw": score, "mirrored": flipped, "path": path, "S": S, "Mo": Mo, "segs": segs}
-    S, Mo = best["S"], best["Mo"]
+            best = {"raw": score, "mirrored": flipped, "segs": segs, "evals": segs_eval, "Mo": Mo}
+    path = [p for g in best["evals"] for p in g["path"]]
+    bg = [v for g in best["evals"] for v in g["bg"]]
+    Mo = best["Mo"]
     return {
         "raw": best["raw"],
         "mirrored": best["mirrored"],
-        "path": [(int(a), int(b)) for a, b in best["path"]],
-        "timeline": [round(float(S[a, b]), 4) for a, b in best["path"]],
+        "path": [(int(a), int(b)) for a, b in path],
+        "timeline": [round(float(v), 4) if v is not None else 0.0 for v in bg],
         # how well each matched pair is the *same moment* (used to pick examples)
-        "moment": [round(float(Mo[a, b]), 4) for a, b in best["path"]],
+        "moment": [round(float(Mo[a, b]) * (0.5 + 0.5 * (v or 0)), 4) for (a, b), v in zip(path, bg)],
         "sections": [{
             "a_start": int(min(a for a, _ in g["path"])), "a_end": int(max(a for a, _ in g["path"])),
             "b_start": int(min(b for _, b in g["path"])), "b_end": int(max(b for _, b in g["path"])),

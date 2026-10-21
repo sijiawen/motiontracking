@@ -5,7 +5,7 @@ Upload an original video (A) and a suspected copy (B). Three independent tests c
 | Test | What it catches | How |
 |---|---|---|
 | Body & motion | Face swap over the same performance | 5 Sapiens2 models (pose, body parts, normals, pointmap, matting) |
-| Scene & visuals | Same room, set and shot with someone else edited in | DINOv2 image fingerprints, with and without the person |
+| Scene & visuals | Same room, set and shot with someone else edited in | DINOv2 patch features: background compared square by square, person ignored |
 | Script | Same words read by a new face or AI voice | Whisper speech-to-text + shared 4+ word phrases |
 
 ```

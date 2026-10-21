@@ -183,3 +183,30 @@ def test_writing_vs_arms_down_is_low():
     A = pose_video(["write"] * 4)
     B = pose_video(["rest"] * 4)
     assert sim_pose(A, B).mean() < 0.5
+
+
+def test_body_parts_same_layout_different_person():
+    """Same pose, different person: other clothes label, no visible teeth,
+    slightly different position. Should still score high on body layout."""
+    from similarity import sim_seg
+
+    def layout(dx=0, arm_up=False, shirt=23, teeth=True):
+        s = np.zeros((64, 48), np.uint8)
+        s[5:20, 17 + dx:31 + dx] = 4                 # hair
+        s[8:20, 19 + dx:29 + dx] = 3                 # face
+        if teeth:
+            s[16:17, 22 + dx:26 + dx] = 26
+        s[20:50, 12 + dx:36 + dx] = shirt            # upper body
+        if arm_up:
+            s[8:30, 4 + dx:11 + dx] = 11; s[4:9, 4 + dx:11 + dx] = 6
+        else:
+            s[22:48, 4 + dx:11 + dx] = 11; s[48:54, 4 + dx:11 + dx] = 6
+        s[22:48, 37 + dx:44 + dx] = 20; s[48:54, 37 + dx:44 + dx] = 15
+        return s
+
+    A = {"seg": np.stack([layout()])}
+    same = {"seg": np.stack([layout(dx=1, shirt=22, teeth=False)])}
+    other = {"seg": np.stack([layout(arm_up=True)])}
+    s_same, s_other = sim_seg(A, same)[0, 0], sim_seg(A, other)[0, 0]
+    print("seg same", s_same, "arm raised", s_other)
+    assert s_same > 0.75 and s_same > s_other + 0.05

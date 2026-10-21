@@ -37,11 +37,11 @@ import numpy as np
 MODELS = ["pose", "seg", "normal", "pointmap", "matting"]
 
 DEFAULT_WEIGHTS = {  # posture is the strongest evidence; calibration re-learns these
-    "pose": 0.40,
+    "pose": 0.60,
     "seg": 0.15,
-    "normal": 0.10,
-    "pointmap": 0.15,
-    "matting": 0.20,
+    "normal": 0.05,
+    "pointmap": 0.05,
+    "matting": 0.15,
 }
 
 GRID_H, GRID_W = 64, 48  # fingerprint resolution (4:3, same aspect as the models)
@@ -286,24 +286,57 @@ def sim_pose(A: dict, B: dict) -> np.ndarray:
     return out.astype(np.float32)
 
 
+# The 29 body-part labels grouped into regions that stay the same between two
+# people doing the same thing (lips, teeth or a shoe label shouldn't decide it).
+SEG_GROUPS = {
+    "head": [2, 3, 24, 25, 26, 27, 28],  # eyeglass, face/neck, lips, teeth, tongue
+    "hair": [4],
+    "upper body": [1, 22, 23],  # apparel, torso, upper clothing
+    "left arm": [7, 11],
+    "right arm": [16, 20],
+    "left hand": [6],
+    "right hand": [15],
+    "lower body": [5, 8, 9, 10, 12, 13, 14, 17, 18, 19, 21],
+}
+SEG_BLUR = 2.0  # grid cells of tolerance (the grid is 48 cells wide)
+
+
+def _seg_group_maps(seg: np.ndarray) -> np.ndarray:
+    """(T, H, W) labels -> (G, T, H*W) softened region masks."""
+    import cv2
+
+    lut = np.full(256, -1, np.int64)
+    for g, labels in enumerate(SEG_GROUPS.values()):
+        lut[labels] = g
+    grp = lut[seg]
+    out = np.zeros((len(SEG_GROUPS),) + seg.shape, np.float32)
+    for g in range(len(SEG_GROUPS)):
+        for t in range(len(seg)):
+            m = (grp[t] == g).astype(np.float32)
+            if m.any():
+                out[g, t] = cv2.GaussianBlur(m, (0, 0), SEG_BLUR)
+    return out.reshape(len(SEG_GROUPS), len(seg), -1)
+
+
 def sim_seg(A: dict, B: dict) -> np.ndarray:
-    """Mean intersection-over-union across body-part classes."""
-    sa = A["seg"].reshape(len(A["seg"]), -1)
-    sb = B["seg"].reshape(len(B["seg"]), -1)
-    N, M = len(sa), len(sb)
-    iou_sum = np.zeros((N, M), np.float32)
-    n_cls = np.zeros((N, M), np.float32)
-    for c in range(1, NUM_SEG_CLASSES):  # skip background
-        a = (sa == c).astype(np.float32)
-        b = (sb == c).astype(np.float32)
-        if a.sum() == 0 and b.sum() == 0:
+    """Body layout: how well each body region (head, hair, upper body, each
+    arm, each hand, lower body) overlaps between frames, with a little spatial
+    tolerance, weighted by how big the region is."""
+    ga, gb = _seg_group_maps(A["seg"]), _seg_group_maps(B["seg"])
+    N, M = ga.shape[1], gb.shape[1]
+    num = np.zeros((N, M), np.float32)
+    den = np.zeros((N, M), np.float32)
+    for g in range(ga.shape[0]):
+        a, b = ga[g], gb[g]
+        aa, bb = (a * a).sum(1), (b * b).sum(1)
+        if aa.max() == 0 and bb.max() == 0:
             continue
-        inter = a @ b.T
-        union = a.sum(1)[:, None] + b.sum(1)[None] - inter
-        present = union > 0
-        iou_sum += np.where(present, inter / np.clip(union, 1, None), 0)
-        n_cls += present
-    return (iou_sum / np.clip(n_cls, 1, None)).astype(np.float32)
+        ab = a @ b.T
+        tanimoto = ab / np.clip(aa[:, None] + bb[None] - ab, 1e-6, None)
+        area = a.sum(1)[:, None] + b.sum(1)[None]
+        num += area * tanimoto
+        den += area
+    return (num / np.clip(den, 1e-6, None)).astype(np.float32)
 
 
 def sim_normal(A: dict, B: dict) -> np.ndarray:

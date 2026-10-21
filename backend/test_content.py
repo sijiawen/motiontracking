@@ -2,35 +2,62 @@
 
 import numpy as np
 
-from content import combine, compare_scene, compare_script, scene_matrix, tokenize
+from content import background_similarity, combine, compare_scene, compare_script, tokenize
 from similarity import subsequence_dtw
 
 rng = np.random.default_rng(0)
 
 
-def fake_video_embeddings(seed, n, d=64, drift=0.05):
-    """A 'video' = a scene vector that drifts slowly from frame to frame."""
+def unit(x):
+    return x / np.linalg.norm(x, axis=-1, keepdims=True)
+
+
+def make_room(seed, h=8, w=5, d=32):
+    return np.random.default_rng(seed).normal(size=(h, w, d))
+
+
+def scene_video(room, moments, seq, seed=0, noise=0.15, person_cols=(1, 3)):
+    """Fake fingerprints: a fixed room (patch grid) with a person in the middle
+    columns, plus a per-moment change that shows up in the whole-frame vector."""
     r = np.random.default_rng(seed)
-    base = r.normal(size=d)
-    frames = np.stack([base + drift * i * r.normal(size=d) for i in range(n)])
-    return {"full": frames, "bg": frames + 0.1 * r.normal(size=frames.shape)}
+    T = len(seq)
+    h, w, d = room.shape
+    patch = np.stack([room + noise * r.normal(size=room.shape) for _ in range(T)])
+    mask = np.zeros((T, h, w), bool)
+    mask[:, 2:, person_cols[0]:person_cols[1] + 1] = True
+    patch[mask] = r.normal(size=(mask.sum(), d))  # the person looks different every time
+    cls = np.stack([room.mean((0, 1)) * 3 + moments[m] + noise * r.normal(size=d) for m in seq])
+    return {"cls": cls, "patch": unit(patch), "mask": mask}
 
 
-def test_scene_copy_beats_unrelated():
-    a = fake_video_embeddings(1, 30)
-    copy = {k: v[5:25] + 0.05 * rng.normal(size=v[5:25].shape) for k, v in a.items()}
-    other = fake_video_embeddings(2, 20)
-    s_copy = compare_scene(a, copy, None, subsequence_dtw)
-    s_other = compare_scene(a, other, None, subsequence_dtw)
-    assert s_copy["raw"] > 0.9
-    assert s_copy["raw"] > s_other["raw"] + 0.5
-    assert s_copy["path"][0][0] in (4, 5, 6)
+MOMENTS = {m: np.random.default_rng(i).normal(size=32) for i, m in enumerate(["wave", "hold", "write", "pack"])}
 
 
-def test_scene_matrix_range():
-    a, b = fake_video_embeddings(3, 5), fake_video_embeddings(4, 7)
-    S = scene_matrix(a, b)
-    assert S.shape == (5, 7) and S.min() >= 0 and S.max() <= 1
+def test_scene_same_set_scores_high_and_lines_up_moments():
+    room = make_room(1)
+    seq_a = ["wave"] * 6 + ["hold"] * 6 + ["write"] * 8 + ["pack"] * 6
+    seq_b = ["write"] * 8 + ["wave"] * 6 + ["hold"] * 6   # re-ordered re-performance
+    out = compare_scene(scene_video(room, MOMENTS, seq_a, 1), scene_video(room, MOMENTS, seq_b, 2), None)
+    right = sum(seq_a[a] == seq_b[b] for a, b in out["path"]) / len(out["path"])
+    assert right > 0.9, right
+    assert out["raw"] > 0.85, out["raw"]
+
+
+def test_scene_different_room_scores_low():
+    seq = ["wave"] * 6 + ["write"] * 6
+    same = compare_scene(scene_video(make_room(1), MOMENTS, seq, 1), scene_video(make_room(1), MOMENTS, seq, 2), None)
+    other = compare_scene(scene_video(make_room(1), MOMENTS, seq, 1), scene_video(make_room(7), MOMENTS, seq, 2), None)
+    print("same room", same["raw"], "other room", other["raw"])
+    assert same["raw"] > other["raw"] + 0.5
+
+
+def test_background_ignores_the_person_and_small_camera_shifts():
+    room = unit(make_room(2, h=16, w=12))
+    ma = np.zeros(room.shape[:2], bool); ma[6:, 4:7] = True
+    shifted = np.roll(room, 1, axis=1)  # camera moved one cell (edge column wraps)
+    other_person = shifted.copy(); other_person[6:, 5:8] = unit(np.random.default_rng(9).normal(size=(10, 3, 32)))
+    s = background_similarity(room, ma, other_person, np.roll(ma, 1, axis=1))
+    assert s > 0.85, s
 
 
 ORIGINAL = ("Hey guys so today I'm going to show you my morning routine. First I always "
@@ -93,32 +120,3 @@ def test_combine_uses_calibration():
     assert out["verdict"] == "Partial or inconclusive match" and out["calibrated"]
 
 
-def test_scene_sections_out_of_order():
-    a = fake_video_embeddings(5, 40, drift=0.15)
-    pick = lambda v, s, e: {k: x[s:e] + 0.03 * rng.normal(size=x[s:e].shape) for k, x in v.items()}  # noqa: E731
-    other = fake_video_embeddings(6, 10, drift=0.15)
-    b = {k: np.concatenate([pick(a, 25, 35)[k], other[k], pick(a, 2, 12)[k]]) for k in a}
-    r = compare_scene(a, b, None)
-    secs = [(s["a_start"], s["b_start"]) for s in r["sections"] if s["similarity"] > 0.8]
-    assert len(secs) == 2 and abs(secs[0][0] - 25) <= 2 and abs(secs[1][0] - 2) <= 2, r["sections"]
-
-
-def test_scene_lines_up_moments_filmed_in_the_same_room():
-    """Both videos are shot in one room, so every frame looks ~alike; the
-    moments (waving, holding things up, writing) must still pair correctly."""
-    r = np.random.default_rng(3)
-    d = 64
-    room = 5 * r.normal(size=d)  # dominates every fingerprint
-    moments = {m: r.normal(size=d) for m in ["wave", "hold", "write", "pack"]}
-
-    def vid(seq, noise=0.3, other_room=0.0):
-        rm = room + other_room * r.normal(size=d)
-        f = np.stack([rm + moments[m] + noise * r.normal(size=d) for m in seq])
-        return {"full": f, "bg": rm + 0.2 * r.normal(size=f.shape)}
-
-    seq_a = ["wave"] * 6 + ["hold"] * 6 + ["write"] * 8 + ["pack"] * 6
-    seq_b = ["write"] * 8 + ["wave"] * 6 + ["hold"] * 6   # re-ordered re-performance
-    out = compare_scene(vid(seq_a), vid(seq_b), None)
-    right = sum(seq_a[a] == seq_b[b] for a, b in out["path"]) / len(out["path"])
-    assert right > 0.9, right
-    assert out["raw"] > 0.9  # same room, so it looks the same

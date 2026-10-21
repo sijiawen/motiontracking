@@ -12,7 +12,7 @@
     { key: "pose", label: "Pose estimation", short: "Pose",
       blurb: "Compares posture: which way the arms, hands, head and body point, and where the hands and head are relative to the shoulders. It works when a different person re-performs the same moves, or the video is cropped or zoomed. Full skeleton shown; face and finger detail are not scored." },
     { key: "seg", label: "Body-part segmentation", short: "Body parts",
-      blurb: "Every pixel labelled as one of 28 body parts or clothing types. Scored by how much each part overlaps between matched frames." },
+      blurb: "Every pixel is labelled by body part, then grouped into head, hair, upper body, each arm, each hand and lower body. Scored by how well those regions overlap, with a little tolerance and bigger regions counting more, so the same pose by a different person still matches." },
     { key: "normal", label: "Surface normals", short: "Normals",
       blurb: "The direction each patch of the body faces, coloured by orientation. Captures fine 3D surface detail like folds and contours." },
     { key: "pointmap", label: "Pointmap (3D depth)", short: "Pointmap",
@@ -28,7 +28,7 @@
   ];
   const PANELS = {
     scene: { label: "Scene & visuals", short: "Scene",
-      blurb: "Each frame gets a visual fingerprint, whole and with the person blanked out. To line up which moment matches which, the part both videos share (the room itself) is set aside, so it can pair moments like waving with waving even when both are filmed in the same room. The score is how alike those matched frames look: room, objects, framing and lighting." },
+      blurb: "Each frame is split into a grid, and every background square (table, wall, ceiling, props) is compared with the same spot in the other video. Squares where the person is are ignored, so a face or body swap over the same set still matches. Moments are lined up first, so waving is compared with waving." },
     script: { label: "Script", short: "Script",
       blurb: "Both videos' speech is transcribed. Highlighted text is phrases of 4+ words that appear in both. The score is the share of the shorter script that was reused." },
   };

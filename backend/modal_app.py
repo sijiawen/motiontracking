@@ -314,29 +314,43 @@ class Analyzer:
                 scores.append(np.asarray(sc[0]).reshape(-1))
         return kpts, scores
 
-    def _embed(self, images_bgr):
-        """DINOv2 embedding per frame (BGR uint8 arrays) -> (T, D) numpy."""
+    def _embed(self, images_bgr, size_hw):
+        """DINOv2 on whole frames (no cropping; aspect kept) ->
+        cls (T, D) and unit-length patch features (T, h, w, D) as float16."""
         import cv2
         import numpy as np
         import torch
 
-        out = []
-        for s in range(0, len(images_bgr), 32):
-            rgb = [cv2.cvtColor(im, cv2.COLOR_BGR2RGB) for im in images_bgr[s : s + 32]]
-            inp = self.scene_proc(images=rgb, return_tensors="pt").to(self.device)
+        H, W = size_hw
+        mean = np.array([0.485, 0.456, 0.406], np.float32)
+        std = np.array([0.229, 0.224, 0.225], np.float32)
+        cls_out, patch_out = [], []
+        for s in range(0, len(images_bgr), 16):
+            batch = []
+            for im in images_bgr[s : s + 16]:
+                rgb = cv2.cvtColor(cv2.resize(im, (W, H), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2RGB)
+                batch.append(((rgb.astype(np.float32) / 255 - mean) / std).transpose(2, 0, 1))
+            x = torch.from_numpy(np.stack(batch)).to(self.device)
             with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                o = self.scene_model(**inp)
-            out.append(o.pooler_output.float().cpu().numpy())
-        return np.concatenate(out, 0)
+                o = self.scene_model(pixel_values=x)
+            cls_out.append(o.pooler_output.float().cpu().numpy())
+            p = o.last_hidden_state[:, 1:].float()
+            p = p / p.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+            patch_out.append(p.reshape(len(batch), H // 14, W // 14, -1).half().cpu().numpy())
+        return np.concatenate(cls_out, 0), np.concatenate(patch_out, 0)
 
-    def _scene_embeddings(self, imgs, mattes, flipped=False):
+    def _scene_embeddings(self, imgs, mattes, size_hw, flipped=False):
+        import numpy as np
+
         import content
 
         if flipped:
             imgs = [im[:, ::-1].copy() for im in imgs]
             mattes = [None if m is None else m[:, ::-1] for m in mattes]
-        bg = [content.blank_person(im, m) for im, m in zip(imgs, mattes)]
-        return {"full": self._embed(imgs), "bg": self._embed(bg)}
+        cls, patch = self._embed(imgs, size_hw)
+        grid = patch.shape[1:3]
+        mask = np.stack([content.patch_person_mask(m, grid) for m in mattes])
+        return {"cls": cls, "patch": patch.astype(np.float32), "mask": mask}
 
     def _transcribe(self, video_path, work, label):
         """Whisper transcript of the video's audio, or "" if there is no speech."""
@@ -407,6 +421,10 @@ class Analyzer:
         # 2. Scene & visuals. Only frames with a person are compared (by both
         #    this test and the body test); title cards, black frames and empty
         #    shots would otherwise match each other.
+        # one patch grid for both videos (multiples of 14 px, long side 392), from A's shape
+        h0, w0 = va["imgs"][0].shape[:2]
+        long_px, short_px = 392, max(112, int(round(392 * min(h0, w0) / max(h0, w0) / 14)) * 14)
+        size_hw = (long_px, short_px) if h0 >= w0 else (short_px, long_px)
         for side, label in (("a", "Video A"), ("b", "Video B")):
             v = res["videos"][side]
             progress(f"{label}: Scene & visuals")
@@ -419,8 +437,8 @@ class Analyzer:
             if len(v["idx"]) >= 2:
                 imgs_p = [v["imgs"][i] for i in v["idx"]]
                 mattes_p = [mattes[i] for i in v["idx"]]
-                v["emb"] = self._scene_embeddings(imgs_p, mattes_p)
-                v["emb_flip"] = (self._scene_embeddings(imgs_p, mattes_p, flipped=True)
+                v["emb"] = self._scene_embeddings(imgs_p, mattes_p, size_hw)
+                v["emb_flip"] = (self._scene_embeddings(imgs_p, mattes_p, size_hw, flipped=True)
                                  if side == "b" else None)
         res["person_frames"] = {"a": int(len(va["idx"])), "b": int(len(vb["idx"])),
                                 "a_total": len(va["imgs"]), "b_total": len(vb["imgs"])}
