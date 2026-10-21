@@ -28,7 +28,7 @@
   ];
   const PANELS = {
     scene: { label: "Scene & visuals", short: "Scene",
-      blurb: "Each frame is turned into a visual fingerprint twice: once whole, and once with the person blanked out. A face or body swapped onto the same footage still matches on the room, objects, framing and lighting." },
+      blurb: "Each frame gets a visual fingerprint, whole and with the person blanked out. To line up which moment matches which, the part both videos share (the room itself) is set aside, so it can pair moments like waving with waving even when both are filmed in the same room. The score is how alike those matched frames look: room, objects, framing and lighting." },
     script: { label: "Script", short: "Script",
       blurb: "Both videos' speech is transcribed. Highlighted text is phrases of 4+ words that appear in both. The score is the share of the shorter script that was reused." },
   };

@@ -40,7 +40,8 @@ DEFAULT_ANCHORS = {
 }
 DEFAULT_VERDICT = {"match": 0.80, "unrelated": 0.55}
 
-SCENE_SEGMENT_FLOOR = 0.55  # scene frames must beat this similarity to form a matched section
+SCENE_SEGMENT_FLOOR = 0.55  # (older versions) scene frames must beat this to form a section
+MOMENT_TAU = 0.5  # two frames are "the same moment" when their room-removed fingerprints agree this well
 MIN_PHRASE_WORDS = 4  # shared runs shorter than this are ignored ("i want to")
 MIN_PHRASE_CHARS = 8  # same, for languages written without spaces (CJK)
 MIN_TRANSCRIPT_WORDS = 8  # below this a video "has no script"
@@ -81,36 +82,53 @@ def blank_person(img_bgr: np.ndarray, alpha: np.ndarray | None) -> np.ndarray:
     return out
 
 
+def moment_matrix(emb_a: dict, emb_b: dict) -> np.ndarray:
+    """Which moment matches which. When both videos are filmed in the same
+    room, every frame looks alike, so the shared "room" part of the
+    fingerprints is removed first (subtract the average fingerprint of both
+    videos); what's left is what changes from moment to moment: the person's
+    posture, what they're holding, what's on the desk."""
+    a, b = emb_a["full"], emb_b["full"]
+    mean = np.concatenate([a, b]).mean(0, keepdims=True)
+    return np.clip(cosine_matrix(a - mean, b - mean), 0, 1)
+
+
 def compare_scene(emb_a: dict, emb_b: dict, emb_b_flipped: dict | None, dtw=None) -> dict:
-    """Find the matching sections (in any order) and score the strongest one."""
+    """Line up the moments with the moment matrix, then score how alike the
+    matched frames look overall (room, objects, framing, lighting)."""
     from similarity import find_segments, subsequence_dtw
 
     best = None
     options = [(False, emb_b)] + ([(True, emb_b_flipped)] if emb_b_flipped else [])
     for flipped, eb in options:
-        S = scene_matrix(emb_a, eb)
-        segs = find_segments(S, floor=SCENE_SEGMENT_FLOOR)
+        S = scene_matrix(emb_a, eb)  # how alike the frames look
+        Mo = moment_matrix(emb_a, eb)  # which moment matches which
+        segs = find_segments(Mo, tau=MOMENT_TAU)
         if segs:
+            for g in segs:
+                g["mean"] = float(np.mean([S[a, b] for a, b in g["path"]]))
             top = max(segs, key=lambda g: g["mean"])
             score, path = top["mean"], [p for g in segs for p in g["path"]]
         else:  # nothing stands out: align the whole videos
             a_rows = S.shape[0] <= S.shape[1]
-            path = subsequence_dtw(S if a_rows else S.T)
+            path = subsequence_dtw(Mo if a_rows else Mo.T)
             if not a_rows:
                 path = [(j, i) for i, j in path]
             score = float(np.mean([S[a, b] for a, b in path]))
         if best is None or score > best["raw"] + 0.03:
-            best = {"raw": score, "mirrored": flipped, "path": path, "S": S, "segs": segs}
-    S = best["S"]
+            best = {"raw": score, "mirrored": flipped, "path": path, "S": S, "Mo": Mo, "segs": segs}
+    S, Mo = best["S"], best["Mo"]
     return {
         "raw": best["raw"],
         "mirrored": best["mirrored"],
         "path": [(int(a), int(b)) for a, b in best["path"]],
         "timeline": [round(float(S[a, b]), 4) for a, b in best["path"]],
+        # how well each matched pair is the *same moment* (used to pick examples)
+        "moment": [round(float(Mo[a, b]), 4) for a, b in best["path"]],
         "sections": [{
-            "a_start": min(a for a, _ in g["path"]), "a_end": max(a for a, _ in g["path"]),
-            "b_start": min(b for _, b in g["path"]), "b_end": max(b for _, b in g["path"]),
-            "similarity": round(g["mean"], 4),
+            "a_start": int(min(a for a, _ in g["path"])), "a_end": int(max(a for a, _ in g["path"])),
+            "b_start": int(min(b for _, b in g["path"])), "b_end": int(max(b for _, b in g["path"])),
+            "similarity": round(float(g["mean"]), 4),
         } for g in best["segs"]],
     }
 

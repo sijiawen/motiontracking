@@ -144,7 +144,7 @@ def _save_pair(sb, cid, name, left, right):
 def render_scene_examples(sb, cid, scene, imgs_a, imgs_b):
     """The raw frames the scene test matched, side by side."""
     out = []
-    for n, p in enumerate(pick_examples(scene["path"], scene["timeline"])):
+    for n, p in enumerate(pick_examples(scene["path"], scene.get("moment") or scene["timeline"])):
         ia, ib = scene["path"][p]
         out.append({
             "path": _save_pair(sb, cid, f"scene_{n}", imgs_a[ia], imgs_b[ib]),

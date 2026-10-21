@@ -101,3 +101,24 @@ def test_scene_sections_out_of_order():
     r = compare_scene(a, b, None)
     secs = [(s["a_start"], s["b_start"]) for s in r["sections"] if s["similarity"] > 0.8]
     assert len(secs) == 2 and abs(secs[0][0] - 25) <= 2 and abs(secs[1][0] - 2) <= 2, r["sections"]
+
+
+def test_scene_lines_up_moments_filmed_in_the_same_room():
+    """Both videos are shot in one room, so every frame looks ~alike; the
+    moments (waving, holding things up, writing) must still pair correctly."""
+    r = np.random.default_rng(3)
+    d = 64
+    room = 5 * r.normal(size=d)  # dominates every fingerprint
+    moments = {m: r.normal(size=d) for m in ["wave", "hold", "write", "pack"]}
+
+    def vid(seq, noise=0.3, other_room=0.0):
+        rm = room + other_room * r.normal(size=d)
+        f = np.stack([rm + moments[m] + noise * r.normal(size=d) for m in seq])
+        return {"full": f, "bg": rm + 0.2 * r.normal(size=f.shape)}
+
+    seq_a = ["wave"] * 6 + ["hold"] * 6 + ["write"] * 8 + ["pack"] * 6
+    seq_b = ["write"] * 8 + ["wave"] * 6 + ["hold"] * 6   # re-ordered re-performance
+    out = compare_scene(vid(seq_a), vid(seq_b), None)
+    right = sum(seq_a[a] == seq_b[b] for a, b in out["path"]) / len(out["path"])
+    assert right > 0.9, right
+    assert out["raw"] > 0.9  # same room, so it looks the same
