@@ -311,3 +311,25 @@ h1 {
 .sections li { display: flex; align-items: center; gap: 10px; font: 13.5px var(--mono); color: var(--ink-2); }
 .sections .arrow { color: var(--muted); }
 .sections b { margin-left: auto; color: var(--ink); font-weight: 500; }
+
+/* ---------- the seven models ---------- */
+.models { list-style: none; padding: 0; margin: 32px 0 0; counter-reset: model; border-top: 1px solid var(--line-2); }
+.models li {
+  counter-increment: model; display: grid; grid-template-columns: 44px minmax(180px, 1.1fr) 2.4fr 160px;
+  gap: 20px; align-items: baseline; padding: 18px 0; border-bottom: 1px solid var(--line);
+}
+.models li::before { content: counter(model, decimal-leading-zero); font: 12px var(--mono); color: var(--muted); }
+.m-name { font-weight: 600; }
+.m-name small { display: block; font: 12px var(--mono); font-weight: 400; color: var(--muted); margin-top: 3px; }
+.m-desc { color: var(--ink-2); font-size: 15px; }
+.m-test {
+  justify-self: start; font: 500 12px/1 var(--mono); padding: 6px 9px; border-radius: 6px; white-space: nowrap;
+  border: 1px solid var(--line-2); color: var(--ink-2); background: var(--card);
+}
+.m-test.body { color: var(--accent); background: var(--accent-soft); border-color: #c9dcd1; }
+.m-test.scene { color: var(--amber); background: var(--amber-soft); border-color: #ecdcb8; }
+.m-test.script { color: var(--rust); background: var(--rust-soft); border-color: #efcdbb; }
+@media (max-width: 800px) {
+  .models li { grid-template-columns: 32px 1fr; gap: 6px 12px; }
+  .models li .m-desc, .models li .m-test { grid-column: 2; }
+}

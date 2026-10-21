@@ -151,21 +151,45 @@
     <section class="method" id="method">
       <div class="method-head">
         <p class="eyebrow"><span>Method</span></p>
-        <h2>Three tests. If any one matches, it was copied.</h2>
+        <h2>Seven models, three tests. If any test matches, it was copied.</h2>
         <p>Commercial deepfakes swap whatever they need to (the face, the voice, the script or the background) and keep the rest. So we test each part separately and report the strongest match. We sample two frames per second from each video and transcribe its speech. Only moments where a person is clearly on screen (the person detector is confident and the person cut-out is large enough) are compared visually, so title cards, black frames and empty shots can't create false matches.</p>
       </div>
-      <ol class="method-grid tests-grid">
-        <li><b>Body &amp; motion</b><span>Five Sapiens2 models track the main person's pose, body parts, 3D shape and silhouette, frame by frame. Catches face swaps over the same performance.</span></li>
-        <li><b>Scene &amp; visuals</b><span>A visual fingerprint of every frame, with and without the person. Catches the same room, set and shot with someone else edited in.</span></li>
-        <li><b>Script</b><span>Speech is transcribed and compared phrase by phrase. Catches a reused script read by a new face or AI voice.</span></li>
-      </ol>
-      <p class="method-sub">Inside the body &amp; motion test:</p>
-      <ol class="method-grid">
-        <li><b>Pose estimation</b><span>Body and hand keypoints, compared after removing position and scale. Face landmarks are left out because face swaps change them.</span></li>
-        <li><b>Body-part segmentation</b><span>A 29-part map of the body and clothing, compared by overlap per part.</span></li>
-        <li><b>Surface normals</b><span>The direction each patch of skin and fabric faces: fine 3D surface detail.</span></li>
-        <li><b>Pointmap</b><span>Relative depth of every pixel of the person: the overall 3D shape.</span></li>
-        <li><b>Human matting</b><span>The exact silhouette, including hair and loose clothing.</span></li>
+      <ol class="models">
+        <li>
+          <span class="m-name">Pose estimation<small>Meta Sapiens2</small></span>
+          <span class="m-desc">Body and hand keypoints, compared after removing position and scale. Face landmarks are left out because face swaps change them.</span>
+          <span class="m-test body">Body &amp; motion</span>
+        </li>
+        <li>
+          <span class="m-name">Body-part segmentation<small>Meta Sapiens2</small></span>
+          <span class="m-desc">A 29-part map of the body and clothing, compared by overlap per part.</span>
+          <span class="m-test body">Body &amp; motion</span>
+        </li>
+        <li>
+          <span class="m-name">Surface normals<small>Meta Sapiens2</small></span>
+          <span class="m-desc">The direction each patch of skin and fabric faces: fine 3D surface detail.</span>
+          <span class="m-test body">Body &amp; motion</span>
+        </li>
+        <li>
+          <span class="m-name">Pointmap<small>Meta Sapiens2</small></span>
+          <span class="m-desc">Relative depth of every pixel of the person: the overall 3D body shape.</span>
+          <span class="m-test body">Body &amp; motion</span>
+        </li>
+        <li>
+          <span class="m-name">Human matting<small>Meta Sapiens2</small></span>
+          <span class="m-desc">The exact silhouette, including hair and loose clothing. Also used to cut the person out for the scene test.</span>
+          <span class="m-test body">Body &amp; motion</span>
+        </li>
+        <li>
+          <span class="m-name">Image fingerprints<small>Meta DINOv2</small></span>
+          <span class="m-desc">A visual fingerprint of every frame, with and without the person. Catches the same room, set and shot with someone else edited in.</span>
+          <span class="m-test scene">Scene &amp; visuals</span>
+        </li>
+        <li>
+          <span class="m-name">Speech to text<small>OpenAI Whisper</small></span>
+          <span class="m-desc">Transcribes what's said; the two scripts are then compared phrase by phrase. Catches a reused script read by a new face or AI voice.</span>
+          <span class="m-test script">Script</span>
+        </li>
       </ol>
       <p class="method-note">Each test looks for matched sections rather than one start-to-finish match, so a copy that is trimmed, re-ordered, sped up, mirrored, or only uses a few seconds of the original inside a longer video still lines up, and each section is listed with its timestamps. Each test is calibrated on a labelled set of known copies and unrelated videos, and the final score is the highest of the three.</p>
     </section>
