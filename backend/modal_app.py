@@ -589,8 +589,13 @@ class Analyzer:
         except Exception as e:  # report every failure to the UI
             import traceback
 
-            traceback.print_exc()
-            table.update({"status": "error", "error": str(e)[:500]}).eq("id", comparison_id).execute()
+            traceback.print_exc()  # full details stay in the Modal logs
+            # Our own checks raise ValueError with a friendly message; anything
+            # else gets a generic one so internals (model names, paths) stay private.
+            msg = str(e) if isinstance(e, ValueError) else (
+                "Something went wrong analysing these videos. Please try again, "
+                "or try different files.")
+            table.update({"status": "error", "error": msg[:500]}).eq("id", comparison_id).execute()
             return {"ok": False, "error": str(e)}
 
     @modal.method()
@@ -636,8 +641,60 @@ def score_calibration_pairs(pairs: list[dict]) -> list[dict]:
 
 # ---------------------------------------------------------------- web API
 
-web_image = modal.Image.debian_slim(python_version="3.12").pip_install(
-    "supabase>=2.4", "fastapi[standard]"
+# ---------------------------------------------------------------- video links
+
+link_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install("ffmpeg")
+    .pip_install("yt-dlp", "supabase>=2.4")
+    .add_local_file(here / "links.py", "/root/links.py")
+)
+
+
+@app.function(image=link_image, secrets=secrets, timeout=600)
+def fetch_links_then_analyze(comparison_id: str):
+    """Download any videos given as links (on a cheap CPU machine), save them to
+    Supabase Storage like uploads, then hand over to the GPU worker."""
+    import links
+
+    sb = supabase()
+    table = sb.table("comparisons")
+    try:
+        row = table.select("*").eq("id", comparison_id).single().execute().data
+        work = tempfile.mkdtemp()
+        for side in ("a", "b"):
+            url = row.get(f"video_{side}_url")
+            if not url or row.get(f"video_{side}_path"):
+                continue
+            table.update({"status": "processing", "stage": f"Video {side.upper()}: downloading from link",
+                          "progress": 3}).eq("id", comparison_id).execute()
+            try:
+                got = links.download(url, work, side, MAX_SECONDS, MAX_BYTES)
+            except ValueError as e:
+                raise ValueError(f"Video {side.upper()}: {e}") from e
+            path = f"{comparison_id}/{side}.mp4"
+            with open(got["path"], "rb") as f:
+                sb.storage.from_("videos").upload(path, f.read(), {"content-type": "video/mp4", "upsert": "true"})
+            table.update({
+                f"video_{side}_path": path, f"video_{side}_size": got["size"],
+                f"video_{side}_name": got["title"] or url[:200],
+            }).eq("id", comparison_id).execute()
+        shutil.rmtree(work, ignore_errors=True)
+        table.update({"stage": "Starting GPU", "progress": 5}).eq("id", comparison_id).execute()
+        Analyzer().run.spawn(comparison_id)
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        msg = str(e) if isinstance(e, ValueError) else (
+            "We couldn't download the video from that link. Please upload the file instead.")
+        table.update({"status": "error", "error": msg[:500]}).eq("id", comparison_id).execute()
+
+
+web_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .pip_install("supabase>=2.4", "fastapi[standard]")
+    .add_local_file(here / "links.py", "/root/links.py")
 )
 
 
@@ -661,10 +718,11 @@ def api():
         key = os.environ.get("ADMIN_KEY")
         return bool(key) and req.headers.get("x-admin-key") == key
 
-    class FileInfo(BaseModel):
-        name: str
-        size: int
+    class FileInfo(BaseModel):  # one video: either an uploaded file or a link
+        name: str = ""
+        size: int = 0
         type: str = ""
+        url: str | None = None
 
     class CreateBody(BaseModel):
         a: FileInfo
@@ -675,9 +733,17 @@ def api():
 
     @web.post("/create")
     def create(body: CreateBody, req: Request):
+        import links
+
         if not body.consent:
             raise HTTPException(400, "Please confirm you have the right to upload these videos.")
         for side, f in (("A", body.a), ("B", body.b)):
+            if f.url:
+                try:
+                    f.url = links.validate_url(f.url)
+                except ValueError as e:
+                    raise HTTPException(400, f"Video {side}: {e}")
+                continue
             if f.size > MAX_BYTES:
                 raise HTTPException(400, f"Video {side} is over {MAX_BYTES // 2**20} MB.")
             if Path(f.name).suffix.lower() not in ALLOWED_EXT:
@@ -692,16 +758,18 @@ def api():
                 raise HTTPException(429, f"You've used your {DAILY_LIMIT} free comparisons for today.")
 
         cid = str(uuid.uuid4())
-        paths = {s: f"{cid}/{s}{Path(f.name).suffix.lower()}" for s, f in (("a", body.a), ("b", body.b))}
-        sb.table("comparisons").insert({
-            "id": cid, "status": "awaiting_upload", "ip_hash": h,
-            "user_agent": (req.headers.get("user-agent") or "")[:300],
-            "consent_at": _now(),
-            "video_a_path": paths["a"], "video_a_name": body.a.name[:200], "video_a_size": body.a.size,
-            "video_b_path": paths["b"], "video_b_name": body.b.name[:200], "video_b_size": body.b.size,
-        }).execute()
+        sides = {"a": body.a, "b": body.b}
+        paths = {s: (None if f.url else f"{cid}/{s}{Path(f.name).suffix.lower()}") for s, f in sides.items()}
+        row = {"id": cid, "status": "awaiting_upload", "ip_hash": h,
+               "user_agent": (req.headers.get("user-agent") or "")[:300], "consent_at": _now()}
+        for s, f in sides.items():
+            row.update({f"video_{s}_path": paths[s], f"video_{s}_url": f.url,
+                        f"video_{s}_name": (f.url or f.name)[:200], f"video_{s}_size": f.size or None})
+        sb.table("comparisons").insert(row).execute()
         uploads = {}
         for s, p in paths.items():
+            if p is None:
+                continue  # fetched from its link later
             r = sb.storage.from_("videos").create_signed_upload_url(p)
             uploads[s] = {"path": p, "token": r.get("token"),
                           "signed_url": r.get("signed_url") or r.get("signedUrl") or r.get("signedURL")}
@@ -714,19 +782,27 @@ def api():
     def analyze(body: AnalyzeBody):
         sb = supabase()
         try:
-            row = sb.table("comparisons").select("status,video_a_path,video_b_path") \
+            row = sb.table("comparisons").select("status,video_a_path,video_b_path,video_a_url,video_b_url") \
                 .eq("id", body.id).single().execute().data
         except Exception:
             raise HTTPException(404, "Comparison not found.")
         if row["status"] != "awaiting_upload":
             return {"ok": True, "status": row["status"]}
-        listed = {o["name"] for o in sb.storage.from_("videos").list(body.id)}
-        for p in (row["video_a_path"], row["video_b_path"]):
-            if Path(p).name not in listed:
-                raise HTTPException(400, "Upload didn't finish. Please try again.")
-        sb.table("comparisons").update({"status": "queued", "stage": "Starting GPU", "progress": 2}) \
-            .eq("id", body.id).execute()
-        Analyzer().run.spawn(body.id)
+        uploaded = [p for p in (row["video_a_path"], row["video_b_path"]) if p]
+        if uploaded:
+            listed = {o["name"] for o in sb.storage.from_("videos").list(body.id)}
+            for p in uploaded:
+                if Path(p).name not in listed:
+                    raise HTTPException(400, "Upload didn't finish. Please try again.")
+        has_links = bool(row.get("video_a_url") or row.get("video_b_url"))
+        sb.table("comparisons").update({
+            "status": "queued", "progress": 2,
+            "stage": "Fetching video from link" if has_links else "Starting GPU",
+        }).eq("id", body.id).execute()
+        if has_links:
+            fetch_links_then_analyze.spawn(body.id)
+        else:
+            Analyzer().run.spawn(body.id)
         return {"ok": True, "status": "queued"}
 
     PUBLIC_FIELDS = (
@@ -756,7 +832,7 @@ def api():
             raise HTTPException(401, "Wrong admin key.")
         sb = supabase()
         rows = sb.table("comparisons").select(
-            "id,created_at,status,error,overall_score,raw_score,verdict,mirrored,model_scores,tests,"
+            "id,created_at,status,error,overall_score,raw_score,verdict,mirrored,model_scores,tests,video_a_url,video_b_url,"
             "video_a_name,video_b_name,video_a_path,video_b_path,video_a_size,video_b_size,"
             "video_a_duration,video_b_duration,ip_hash,user_agent,timings"
         ).order("created_at", desc=True).limit(min(limit, 500)).execute().data

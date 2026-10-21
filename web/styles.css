@@ -333,3 +333,17 @@ h1 {
   .models li { grid-template-columns: 32px 1fr; gap: 6px 12px; }
   .models li .m-desc, .models li .m-test { grid-column: 2; }
 }
+
+/* ---------- link input under each drop zone ---------- */
+.side { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.side .drop { flex: 1; }
+.link-input {
+  width: 100%; font: 14px var(--sans); color: var(--ink); background: var(--card);
+  border: 1px solid var(--line-2); border-radius: 9px; padding: 10px 12px;
+}
+.link-input::placeholder { color: var(--muted); }
+.link-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+.link-input.bad { border-color: var(--rust); background: var(--rust-soft); }
+.drop.using-link { border-style: solid; border-color: var(--accent); background: var(--accent-soft); }
+.drop.using-link .drop-empty svg { opacity: .35; }
+.drop-prompt b { font-weight: 600; color: var(--accent); }

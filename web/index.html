@@ -47,36 +47,44 @@
 
         <form id="form" novalidate>
           <div class="drops">
-            <label class="drop" data-side="a">
-              <input type="file" accept="video/mp4,video/quicktime,video/webm,video/x-m4v,.mp4,.mov,.webm,.m4v,.mkv,.avi" hidden />
-              <span class="drop-tag">A</span>
-              <span class="drop-title">Original</span>
-              <span class="drop-empty">
-                <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M16 22V10m0 0-5 5m5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                <span>Drop a video or <u>browse</u></span>
-              </span>
-              <span class="drop-file" hidden>
-                <video muted playsinline preload="metadata"></video>
-                <span class="file-meta"><b class="file-name"></b><span class="file-info"></span></span>
-                <button type="button" class="file-clear" aria-label="Remove video">×</button>
-              </span>
-            </label>
-            <label class="drop" data-side="b">
-              <input type="file" accept="video/mp4,video/quicktime,video/webm,video/x-m4v,.mp4,.mov,.webm,.m4v,.mkv,.avi" hidden />
-              <span class="drop-tag">B</span>
-              <span class="drop-title">Suspected copy</span>
-              <span class="drop-empty">
-                <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M16 22V10m0 0-5 5m5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                <span>Drop a video or <u>browse</u></span>
-              </span>
-              <span class="drop-file" hidden>
-                <video muted playsinline preload="metadata"></video>
-                <span class="file-meta"><b class="file-name"></b><span class="file-info"></span></span>
-                <button type="button" class="file-clear" aria-label="Remove video">×</button>
-              </span>
-            </label>
+            <div class="side" data-side="a">
+              <label class="drop" data-side="a">
+                <input type="file" accept="video/mp4,video/quicktime,video/webm,video/x-m4v,.mp4,.mov,.webm,.m4v,.mkv,.avi" hidden />
+                <span class="drop-tag">A</span>
+                <span class="drop-title">Original</span>
+                <span class="drop-empty">
+                  <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M16 22V10m0 0-5 5m5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <span class="drop-prompt">Drop a video or <u>browse</u></span>
+                </span>
+                <span class="drop-file" hidden>
+                  <video muted playsinline preload="metadata"></video>
+                  <span class="file-meta"><b class="file-name"></b><span class="file-info"></span></span>
+                  <button type="button" class="file-clear" aria-label="Remove video">×</button>
+                </span>
+              </label>
+              <input type="url" class="link-input" data-side="a" inputmode="url" autocomplete="off" spellcheck="false"
+                placeholder="or paste a link to video A" aria-label="Link to video A" />
+            </div>
+            <div class="side" data-side="b">
+              <label class="drop" data-side="b">
+                <input type="file" accept="video/mp4,video/quicktime,video/webm,video/x-m4v,.mp4,.mov,.webm,.m4v,.mkv,.avi" hidden />
+                <span class="drop-tag">B</span>
+                <span class="drop-title">Suspected copy</span>
+                <span class="drop-empty">
+                  <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M16 22V10m0 0-5 5m5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <span class="drop-prompt">Drop a video or <u>browse</u></span>
+                </span>
+                <span class="drop-file" hidden>
+                  <video muted playsinline preload="metadata"></video>
+                  <span class="file-meta"><b class="file-name"></b><span class="file-info"></span></span>
+                  <button type="button" class="file-clear" aria-label="Remove video">×</button>
+                </span>
+              </label>
+              <input type="url" class="link-input" data-side="b" inputmode="url" autocomplete="off" spellcheck="false"
+                placeholder="or paste a link to video B" aria-label="Link to video B" />
+            </div>
           </div>
-          <p class="limits">MP4, MOV or WebM · up to <span data-max-seconds>60</span> seconds · <span data-max-mb>50</span> MB each · one main person on screen works best</p>
+          <p class="limits">Upload MP4, MOV or WebM, or paste a link (TikTok, Instagram, YouTube, X and most public video pages) · up to <span data-max-seconds>60</span> seconds · <span data-max-mb>50</span> MB each · one main person on screen works best</p>
 
           <label class="consent">
             <input type="checkbox" id="consent" />
@@ -101,7 +109,7 @@
           </div>
           <div class="bar"><span id="bar"></span></div>
           <ol class="steps" id="steps">
-            <li data-step="upload">Upload videos</li>
+            <li data-step="upload">Upload or fetch videos</li>
             <li data-step="gpu">Start GPU and load models</li>
             <li data-step="script">Script: transcribe and compare speech</li>
             <li data-step="scene">Scene &amp; visuals</li>
@@ -156,37 +164,37 @@
       </div>
       <ol class="models">
         <li>
-          <span class="m-name">Pose estimation<small>Meta Sapiens2</small></span>
+          <span class="m-name">Pose estimation</span>
           <span class="m-desc">Body and hand keypoints, compared after removing position and scale. Face landmarks are left out because face swaps change them.</span>
           <span class="m-test body">Body &amp; motion</span>
         </li>
         <li>
-          <span class="m-name">Body-part segmentation<small>Meta Sapiens2</small></span>
+          <span class="m-name">Body-part segmentation</span>
           <span class="m-desc">A 29-part map of the body and clothing, compared by overlap per part.</span>
           <span class="m-test body">Body &amp; motion</span>
         </li>
         <li>
-          <span class="m-name">Surface normals<small>Meta Sapiens2</small></span>
+          <span class="m-name">Surface normals</span>
           <span class="m-desc">The direction each patch of skin and fabric faces: fine 3D surface detail.</span>
           <span class="m-test body">Body &amp; motion</span>
         </li>
         <li>
-          <span class="m-name">Pointmap<small>Meta Sapiens2</small></span>
+          <span class="m-name">Pointmap</span>
           <span class="m-desc">Relative depth of every pixel of the person: the overall 3D body shape.</span>
           <span class="m-test body">Body &amp; motion</span>
         </li>
         <li>
-          <span class="m-name">Human matting<small>Meta Sapiens2</small></span>
+          <span class="m-name">Human matting</span>
           <span class="m-desc">The exact silhouette, including hair and loose clothing. Also used to cut the person out for the scene test.</span>
           <span class="m-test body">Body &amp; motion</span>
         </li>
         <li>
-          <span class="m-name">Image fingerprints<small>Meta DINOv2</small></span>
+          <span class="m-name">Image fingerprints</span>
           <span class="m-desc">A visual fingerprint of every frame, with and without the person. Catches the same room, set and shot with someone else edited in.</span>
           <span class="m-test scene">Scene &amp; visuals</span>
         </li>
         <li>
-          <span class="m-name">Speech to text<small>OpenAI Whisper</small></span>
+          <span class="m-name">Speech to text</span>
           <span class="m-desc">Transcribes what's said; the two scripts are then compared phrase by phrase. Catches a reused script read by a new face or AI voice.</span>
           <span class="m-test script">Script</span>
         </li>

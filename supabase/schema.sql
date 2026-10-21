@@ -38,6 +38,8 @@ create table if not exists public.comparisons (
 -- (for databases created before the scene + script tests were added)
 alter table public.comparisons add column if not exists tests jsonb;
 alter table public.comparisons add column if not exists transcripts jsonb;
+alter table public.comparisons add column if not exists video_a_url text;
+alter table public.comparisons add column if not exists video_b_url text;
 
 create index if not exists comparisons_created_at_idx on public.comparisons (created_at desc);
 create index if not exists comparisons_ip_hash_idx on public.comparisons (ip_hash, created_at);

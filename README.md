@@ -134,6 +134,10 @@ Until you do this, results show an **"Uncalibrated preview score"** badge. Raw s
 
 To tweak the analysis without re-running the GPU, change `similarity.py` and run `python backend/calibrate.py my_test_set --reuse`.
 
+## Video links
+
+People can paste a link (TikTok, Instagram, YouTube, X and most public video pages) instead of uploading. A small CPU function on Modal downloads it with [yt-dlp](https://github.com/yt-dlp/yt-dlp) at up to 720p, saves it to the `videos` bucket like an upload, then starts the GPU. The same 60-second / 50 MB limits apply. Some sites block downloads from cloud servers or need a login (private accounts, some YouTube videos); the user then sees a message asking them to upload the file instead. Run `supabase/add_video_links.sql` once to add the two link columns.
+
 ## Limits and costs
 
 - **Uploads:** 60 seconds and 50 MB per video. 50 MB is the Supabase free-plan maximum. To raise it, upgrade Supabase to Pro and change `MAX_SECONDS`/`MAX_BYTES` in `modal_app.py`, the bucket limit in `schema.sql`, and `web/config.js`.

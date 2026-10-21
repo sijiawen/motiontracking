@@ -10,7 +10,7 @@
   const API = CFG.API_URL.replace(/\/$/, "");
   const MODELS = [
     { key: "pose", label: "Pose estimation", short: "Pose",
-      blurb: "Body and hand keypoints (308-point skeleton shown; face landmarks are not scored). Compared after removing position and scale, so a cropped or zoomed copy still lines up." },
+      blurb: "Body and hand keypoints (full skeleton shown; face landmarks are not scored). Compared after removing position and scale, so a cropped or zoomed copy still lines up." },
     { key: "seg", label: "Body-part segmentation", short: "Body parts",
       blurb: "Every pixel labelled as one of 28 body parts or clothing types. Scored by how much each part overlaps between matched frames." },
     { key: "normal", label: "Surface normals", short: "Normals",
@@ -22,7 +22,7 @@
   ];
 
   const TESTS = [
-    { key: "body", label: "Body & motion", sub: "Pose, body shape and silhouette over time (5 Sapiens2 models)" },
+    { key: "body", label: "Body & motion", sub: "Pose, body shape and silhouette over time (5 models)" },
     { key: "scene", label: "Scene & visuals", sub: "Room, objects, framing and lighting, with and without the person" },
     { key: "script", label: "Script", sub: "What was said, transcribed and compared word for word" },
   ];
@@ -35,7 +35,7 @@
 
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
-  const state = { files: { a: null, b: null }, ok: { a: false, b: false }, pollTimer: null, current: null, tab: "pose" };
+  const state = { files: { a: null, b: null }, links: { a: "", b: "" }, ok: { a: false, b: false }, pollTimer: null, current: null, tab: "pose" };
 
   // ------------------------------------------------------------ setup
   $$("[data-app-name]").forEach((n) => (n.textContent = CFG.APP_NAME));
@@ -75,13 +75,36 @@
     });
   });
 
-  function clearFile(side) {
+  const LINK_RE = /^(https?:\/\/)?[^\s/]+\.[^\s/]{2,}(\/\S*)?$/i;
+  $$(".link-input").forEach((inp) => {
+    inp.addEventListener("input", () => setLink(inp.dataset.side, inp.value));
+    inp.addEventListener("paste", () => setTimeout(() => setLink(inp.dataset.side, inp.value), 0));
+  });
+
+  function setLink(side, value) {
+    const v = value.trim();
+    const drop = $(`.drop[data-side="${side}"]`);
+    const inp = $(`.link-input[data-side="${side}"]`);
+    if (v && state.files[side]) clearFile(side, true);
+    state.links[side] = v;
+    const valid = !!v && LINK_RE.test(v);
+    inp.classList.toggle("bad", !!v && !valid);
+    drop.classList.toggle("using-link", valid);
+    let host = "";
+    try { host = new URL(/^https?:/i.test(v) ? v : "https://" + v).hostname.replace(/^www\./, ""); } catch (_) {}
+    $(".drop-prompt", drop).innerHTML = valid ? `Using link from <b>${host}</b>` : "Drop a video or <u>browse</u>";
+    state.ok[side] = valid;
+    refresh();
+  }
+
+  function clearFile(side, keepLink) {
     const drop = $(`.drop[data-side="${side}"]`);
     const v = $("video", drop);
     if (v.src) URL.revokeObjectURL(v.src);
     v.removeAttribute("src");
     $("input", drop).value = "";
-    state.files[side] = null; state.ok[side] = false;
+    state.files[side] = null;
+    state.ok[side] = !keepLink && !!state.links[side] && LINK_RE.test(state.links[side]);
     drop.classList.remove("has-file");
     $(".drop-empty", drop).hidden = false;
     $(".drop-file", drop).hidden = true;
@@ -90,6 +113,13 @@
 
   function setFile(side, file) {
     const drop = $(`.drop[data-side="${side}"]`);
+    if (state.links[side]) {  // a file replaces a pasted link
+      $(`.link-input[data-side="${side}"]`).value = "";
+      state.links[side] = "";
+      drop.classList.remove("using-link");
+      $(".drop-prompt", drop).innerHTML = "Drop a video or <u>browse</u>";
+      $(`.link-input[data-side="${side}"]`).classList.remove("bad");
+    }
     const info = $(".file-info", drop);
     const v = $("video", drop);
     state.files[side] = file;
@@ -122,12 +152,13 @@
   $("#consent").addEventListener("change", refresh);
 
   function refresh() {
-    const both = state.files.a && state.files.b;
+    const has = (k) => state.files[k] || state.links[k];
+    const both = has("a") && has("b");
     const valid = state.ok.a && state.ok.b;
     const consent = $("#consent").checked;
     $("#submit").disabled = !(both && valid && consent);
-    $("#hint").textContent = !both ? "Add both videos to begin"
-      : !valid ? "Fix the highlighted video"
+    $("#hint").textContent = !both ? "Add both videos (file or link) to begin"
+      : !valid ? "Fix the highlighted video or link"
       : !consent ? "Confirm you have the right to upload these"
       : "Ready · takes about 3–5 minutes";
     showError(null);
@@ -154,6 +185,7 @@
     });
   }
   function stageToStep(stage = "", status = "") {
+    if (/link/i.test(stage)) return "upload";
     if (status === "queued" || /starting|download/i.test(stage)) return "gpu";
     if (/transcrib/i.test(stage)) return "script";
     if (/scene/i.test(stage)) return "scene";
@@ -230,20 +262,20 @@
     ev.preventDefault();
     if ($("#submit").disabled) return;
     if (DEMO) return runDemo();
-    const { a, b } = state.files;
+    const sideBody = (k) => state.files[k]
+      ? { name: state.files[k].name, size: state.files[k].size, type: state.files[k].type }
+      : { url: state.links[k] };
     try {
-      setProgress("upload", "Preparing upload", 0);
+      setProgress("upload", "Preparing", 0);
       const created = await api("/create", {
         method: "POST",
-        body: JSON.stringify({
-          consent: true,
-          a: { name: a.name, size: a.size, type: a.type },
-          b: { name: b.name, size: b.size, type: b.type },
-        }),
+        body: JSON.stringify({ consent: true, a: sideBody("a"), b: sideBody("b") }),
       });
-      const total = a.size + b.size;
+      const toUpload = ["a", "b"].filter((k) => state.files[k]);
+      const total = toUpload.reduce((n, k) => n + state.files[k].size, 0) || 1;
       let sent = 0;
-      for (const [side, file] of [["a", a], ["b", b]]) {
+      for (const side of toUpload) {
+        const file = state.files[side];
         await uploadFile(created.uploads[side], file, (f) => {
           const frac = (sent + f * file.size) / total;
           setProgress("upload", `Uploading video ${side.toUpperCase()}`, frac * 0.2);
@@ -459,6 +491,7 @@
     $("#results").hidden = true;
     history.replaceState(null, "", location.pathname + (DEMO && params.has("demo") ? "?demo=1" : ""));
     clearFile("a"); clearFile("b");
+    $$(".link-input").forEach((inp) => { inp.value = ""; setLink(inp.dataset.side, ""); });
     $("#tool").scrollIntoView({ behavior: "smooth", block: "center" });
   });
   $("#copyLink").addEventListener("click", async () => {
