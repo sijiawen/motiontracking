@@ -5,12 +5,20 @@ Run:  pip install numpy opencv-python-headless pytest && python -m pytest backen
 import numpy as np
 
 from similarity import (
-    FrameFingerprint, MODELS, compare, make_fingerprint, mirror, stack, subsequence_dtw,
+    POSE_POINTS, FrameFingerprint, MODELS, compare, make_fingerprint, mirror, sim_pose, stack,
+    subsequence_dtw,
 )
 
-H, W, K = 480, 360, 20
+H, W = 480, 360
+K = len(POSE_POINTS)
 rng = np.random.default_rng(0)
-FLIP = np.array([(i + 1 if i % 2 == 0 else i - 1) for i in range(K)])  # pairs (0,1),(2,3)...
+
+
+def _swap(n):
+    return n.replace("left", "@").replace("right", "left").replace("@", "right")
+
+
+FLIP = np.array([POSE_POINTS.index(_swap(n)) for n in POSE_POINTS])
 
 
 def person_frame(t, seed, shift=0.0, scale=1.0):
@@ -115,3 +123,63 @@ def test_short_copied_clip_inside_long_video():
     print("clip", r.overall_raw, r.sections, "other", o.overall_raw)
     assert r.overall_raw > o.overall_raw + 0.2
     assert any(abs(s["a_start"] - 20) <= 2 and abs(s["b_start"] - 25) <= 2 for s in r.sections)
+
+
+
+# ---- posture: the same moves performed by a different person ----
+
+def stick(action, t, size=1.0, cx=180, cy=200, noise=0.0, seed=0):
+    """Named keypoints for a seated person doing an action at time t."""
+    r = np.random.default_rng(seed)
+    P = {}
+    sw = 60 * size  # shoulder width
+    P["left_shoulder"], P["right_shoulder"] = (cx + sw / 2, cy), (cx - sw / 2, cy)
+    P["neck"] = (cx, cy - 8 * size)
+    head_down = action == "write"
+    P["nose"] = (cx, cy - (20 if head_down else 55) * size)
+    P["left_eye"], P["right_eye"] = (cx + 10 * size, P["nose"][1] - 8 * size), (cx - 10 * size, P["nose"][1] - 8 * size)
+    P["left_ear"], P["right_ear"] = (cx + 22 * size, P["nose"][1] - 4 * size), (cx - 22 * size, P["nose"][1] - 4 * size)
+    def arm(side, ang_up, ang_fore, L1=45, L2=40):
+        sx, sy = P[f"{side}_shoulder"]
+        sgn = 1 if side == "left" else -1
+        ex, ey = sx + sgn * L1 * size * np.sin(ang_up), sy + L1 * size * np.cos(ang_up)
+        wx, wy = ex + sgn * L2 * size * np.sin(ang_fore), ey + L2 * size * np.cos(ang_fore)
+        P[f"{side}_elbow"], P[f"{side}_wrist"] = (ex, ey), (wx, wy)
+        P[f"{side}_middle_finger_third_joint"] = (wx + sgn * 8 * size * np.sin(ang_fore), wy + 8 * size * np.cos(ang_fore))
+        P[f"{side}_thumb4"] = (wx + sgn * 6 * size, wy - 4 * size)
+    if action == "wave":
+        arm("left", 0.3, 0.3); arm("right", 2.2, 3.0 + 0.3 * np.sin(3 * t))
+    elif action == "scrunchie":
+        arm("left", 1.4, 2.8); arm("right", 1.4, 2.8)
+    elif action == "write":
+        arm("left", 0.4, 1.5); arm("right", 0.5, 1.4 + 0.1 * np.sin(2 * t))
+    else:  # arms down
+        arm("left", 0.15, 0.1); arm("right", 0.15, 0.1)
+    for n in ["left_hip", "right_hip", "left_knee", "right_knee", "left_ankle", "right_ankle"]:
+        P[n] = (cx, cy + 200)  # hidden behind the table
+    k = np.array([P[n] for n in POSE_POINTS], np.float32) + noise * size * r.normal(size=(K, 2))
+    sc = np.array([0.1 if any(x in n for x in ("hip", "knee", "ankle")) else 0.9 for n in POSE_POINTS])
+    return k, sc
+
+
+def pose_video(actions, **kw):
+    ks, scs = zip(*[stick(a, i * 0.5, seed=i, **kw) for i, a in enumerate(actions)])
+    return {"kpts": np.stack(ks), "kpt_scores": np.stack(scs)}
+
+
+def test_same_moves_different_person_scores_high():
+    script = ["wave"] * 6 + ["scrunchie"] * 6 + ["write"] * 8
+    A = pose_video(script, noise=2)
+    # a different, smaller person, framed differently, doing the same moves in a different order
+    B = pose_video(["write"] * 8 + ["wave"] * 6 + ["scrunchie"] * 6, size=0.8, cx=150, cy=230, noise=3)
+    S = sim_pose(A, B)
+    same = [S[i, j] for i in range(20) for j in range(20) if script[i] == (["write"] * 8 + ["wave"] * 6 + ["scrunchie"] * 6)[j]]
+    diff = [S[i, j] for i in range(20) for j in range(20) if script[i] != (["write"] * 8 + ["wave"] * 6 + ["scrunchie"] * 6)[j]]
+    print("same-move mean", np.mean(same), "different-move mean", np.mean(diff))
+    assert np.mean(same) > 0.85 and np.mean(diff) < 0.5
+
+
+def test_writing_vs_arms_down_is_low():
+    A = pose_video(["write"] * 4)
+    B = pose_video(["rest"] * 4)
+    assert sim_pose(A, B).mean() < 0.5

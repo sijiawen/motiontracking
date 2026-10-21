@@ -84,16 +84,28 @@ def _fit(im, h=OUT_HEIGHT):
     return cv2.resize(im, (int(im.shape[1] * h / im.shape[0]), h), interpolation=cv2.INTER_AREA)
 
 
-def pick_examples(path, n=EXAMPLES_PER_MODEL):
+def pick_examples(path, scores=None, n=EXAMPLES_PER_MODEL, min_gap=4):
+    """Pick the best-matching moments to show, at least `min_gap` frames
+    (2 s) apart in video B so the examples cover different moments."""
     if len(path) <= n:
         return list(range(len(path)))
-    return [int(round(x)) for x in np.linspace(len(path) * 0.15, len(path) * 0.85, n)]
+    if scores is None:
+        return [int(round(x)) for x in np.linspace(len(path) * 0.15, len(path) * 0.85, n)]
+    order = np.argsort(-np.asarray(scores, float))
+    picks = []
+    for i in order:
+        if all(abs(path[i][1] - path[j][1]) >= min_gap for j in picks):
+            picks.append(int(i))
+        if len(picks) == n:
+            break
+    return sorted(picks, key=lambda i: path[i][1])
 
 
 def render_examples(sb, cid, res, va, vb, metainfo):
     imgs_a, out_a, _ = va
     imgs_b, out_b, _ = vb
-    picks = pick_examples(res.path)
+    overall = np.mean([res.timelines[m] for m in res.timelines], axis=0)
+    picks = pick_examples(res.path, overall)
     frames = {}
     for model, fn in VIS.items():
         frames[model] = []
@@ -132,7 +144,7 @@ def _save_pair(sb, cid, name, left, right):
 def render_scene_examples(sb, cid, scene, imgs_a, imgs_b):
     """The raw frames the scene test matched, side by side."""
     out = []
-    for n, p in enumerate(pick_examples(scene["path"])):
+    for n, p in enumerate(pick_examples(scene["path"], scene["timeline"])):
         ia, ib = scene["path"][p]
         out.append({
             "path": _save_pair(sb, cid, f"scene_{n}", imgs_a[ia], imgs_b[ib]),

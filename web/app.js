@@ -10,7 +10,7 @@
   const API = CFG.API_URL.replace(/\/$/, "");
   const MODELS = [
     { key: "pose", label: "Pose estimation", short: "Pose",
-      blurb: "Body and hand keypoints (full skeleton shown; face landmarks are not scored). Compared after removing position and scale, so a cropped or zoomed copy still lines up." },
+      blurb: "Compares posture: which way the arms, hands, head and body point, and where the hands and head are relative to the shoulders. It works when a different person re-performs the same moves, or the video is cropped or zoomed. Full skeleton shown; face and finger detail are not scored." },
     { key: "seg", label: "Body-part segmentation", short: "Body parts",
       blurb: "Every pixel labelled as one of 28 body parts or clothing types. Scored by how much each part overlaps between matched frames." },
     { key: "normal", label: "Surface normals", short: "Normals",

@@ -36,10 +36,10 @@ import numpy as np
 
 MODELS = ["pose", "seg", "normal", "pointmap", "matting"]
 
-DEFAULT_WEIGHTS = {
-    "pose": 0.30,
-    "seg": 0.20,
-    "normal": 0.15,
+DEFAULT_WEIGHTS = {  # posture is the strongest evidence; calibration re-learns these
+    "pose": 0.40,
+    "seg": 0.15,
+    "normal": 0.10,
     "pointmap": 0.15,
     "matting": 0.20,
 }
@@ -49,7 +49,6 @@ KPT_THR = 0.3  # keypoint confidence below this is ignored
 # A frame only counts as "has a person" (and is compared at all) when BOTH:
 PERSON_DET_THR = 0.5  # the person detector is at least this confident, and
 PERSON_MIN_AREA = 0.015  # the matting model's person cut-out covers >= 1.5% of the frame
-POSE_SIGMA = 0.15  # tolerance for keypoint distance after normalisation
 STEP_PENALTY = 0.10  # DTW cost for a non-diagonal (time-warping) step
 SEGMENT_FLOOR = 0.45  # a section's frames must beat this similarity (and the pair's own 90th percentile)
 MIRROR_MARGIN = 0.05  # flipped B must beat un-flipped B by this much (raw score)
@@ -59,18 +58,42 @@ MIRROR_MIN_SCORE = 0.50  # and reach at least this raw score
 SEG_LR_PAIRS = [(5, 14), (6, 15), (7, 16), (8, 17), (9, 18), (10, 19), (11, 20), (12, 21)]
 NUM_SEG_CLASSES = 29
 
-# Keypoint names that are body or hands (everything else is face/ear detail)
-BODY_KEYWORDS = (
-    "shoulder", "elbow", "wrist", "hip", "knee", "ankle", "toe", "heel",
-    "thumb", "finger", "olecranon", "cubital", "acromion", "neck",
-)
+# The pose test compares a person's *posture*, not their exact body: which way
+# each limb points, and where the hands and head are relative to the shoulders.
+# That stays the same when a different person re-performs the same moves (other
+# arm lengths, other camera, other zoom), and when a face is swapped. Fine detail
+# like individual finger joints and face landmarks is left out on purpose.
+POSE_POINTS = [
+    "nose", "left_eye", "right_eye", "left_ear", "right_ear", "neck",
+    "left_shoulder", "right_shoulder", "left_elbow", "right_elbow", "left_wrist", "right_wrist",
+    "left_hip", "right_hip", "left_knee", "right_knee", "left_ankle", "right_ankle",
+    "left_middle_finger_third_joint", "right_middle_finger_third_joint",
+    "left_thumb4", "right_thumb4",
+]
+_P = {n: i for i, n in enumerate(POSE_POINTS)}
+# (from, to, weight): limb directions
+LIMBS = [
+    ("left_shoulder", "left_elbow", 1.5), ("left_elbow", "left_wrist", 1.5),
+    ("right_shoulder", "right_elbow", 1.5), ("right_elbow", "right_wrist", 1.5),
+    ("left_wrist", "left_middle_finger_third_joint", 0.75), ("left_wrist", "left_thumb4", 0.5),
+    ("right_wrist", "right_middle_finger_third_joint", 0.75), ("right_wrist", "right_thumb4", 0.5),
+    ("neck", "nose", 1.5), ("left_eye", "right_eye", 0.5), ("left_shoulder", "right_shoulder", 0.75),
+    ("left_shoulder", "left_hip", 1.0), ("right_shoulder", "right_hip", 1.0),
+    ("left_hip", "left_knee", 1.0), ("left_knee", "left_ankle", 1.0),
+    ("right_hip", "right_knee", 1.0), ("right_knee", "right_ankle", 1.0),
+]
+LIMBS_IDX = [(_P[a], _P[b], w) for a, b, w in LIMBS]
+# (point, weight): positions relative to the shoulders, in shoulder-widths
+ANCHORED = [("left_wrist", 1.5), ("right_wrist", 1.5), ("nose", 1.0)]
+ANCHORED_IDX = [(_P[n], w) for n, w in ANCHORED]
+LIMB_SIGMA = 0.45  # radians (~26 degrees) of tolerance on a limb's direction
+ANCHOR_SIGMA = 0.45  # shoulder-widths of tolerance on a hand / head position
+MIN_POSE_PARTS = 3  # fewer shared visible parts than this -> no pose score
 
 
 def body_keypoint_indices(keypoint_names: list[str]) -> np.ndarray:
-    return np.array(
-        [i for i, n in enumerate(keypoint_names) if any(k in n for k in BODY_KEYWORDS)],
-        dtype=np.int64,
-    )
+    """Indices (in the model's 308 keypoints) of POSE_POINTS, in that order."""
+    return np.array([keypoint_names.index(n) for n in POSE_POINTS], dtype=np.int64)
 
 
 # --------------------------------------------------------------------------
@@ -214,27 +237,53 @@ def mirror(v: dict, kpt_flip: np.ndarray, frame_width: float) -> dict:
 # --------------------------------------------------------------------------
 
 
+def _pose_features(k: np.ndarray, sc: np.ndarray):
+    """k: (T, K, 2) keypoints, sc: (T, K) confidences ->
+    limb unit vectors (T, L, 2) + visible (T, L), anchored points (T, P, 2) + visible (T, P)."""
+    vis = sc > KPT_THR
+    limbs, lvis = [], []
+    for a, b, _ in LIMBS_IDX:
+        v = k[:, b] - k[:, a]
+        n = np.linalg.norm(v, axis=-1, keepdims=True)
+        limbs.append(v / np.clip(n, 1e-6, None))
+        lvis.append(vis[:, a] & vis[:, b] & (n[:, 0] > 1e-3))
+    ls, rs = _P["left_shoulder"], _P["right_shoulder"]
+    mid = (k[:, ls] + k[:, rs]) / 2
+    width = np.linalg.norm(k[:, ls] - k[:, rs], axis=-1)
+    shoulders_ok = vis[:, ls] & vis[:, rs] & (width > 1e-3)
+    pts, pvis = [], []
+    for i, _ in ANCHORED_IDX:
+        pts.append((k[:, i] - mid) / np.clip(width[:, None], 1e-6, None))
+        pvis.append(vis[:, i] & shoulders_ok)
+    return (np.stack(limbs, 1), np.stack(lvis, 1), np.stack(pts, 1), np.stack(pvis, 1))
+
+
 def sim_pose(A: dict, B: dict) -> np.ndarray:
-    """Keypoints are compared after removing position and scale, using only
-    joints that are confidently visible in both frames."""
-    ka, kb = A["kpts"][:, None], B["kpts"][None]  # (N,1,K,2), (1,M,K,2)
-    w = ((A["kpt_scores"][:, None] > KPT_THR) & (B["kpt_scores"][None] > KPT_THR)).astype(
-        np.float32
-    )  # (N,M,K)
-    cnt = w.sum(-1)  # (N,M)
-    wk = w[..., None]
-
-    def normalise(k):
-        c = (k * wk).sum(-2, keepdims=True) / np.clip(cnt[..., None, None], 1, None)
-        z = k - c
-        r = np.sqrt((z**2 * wk).sum((-1, -2)) / np.clip(cnt, 1, None))  # RMS radius
-        return z / np.clip(r[..., None, None], 1e-6, None)
-
-    za, zb = normalise(ka), normalise(kb)
-    d2 = ((za - zb) ** 2).sum(-1)  # (N,M,K)
-    s = (np.exp(-d2 / (2 * POSE_SIGMA**2)) * w).sum(-1) / np.clip(cnt, 1, None)
-    s[cnt < 6] = 0.0  # too few shared joints to say anything
-    return s.astype(np.float32)
+    """Posture similarity: limb directions + hand/head positions relative to
+    the shoulders, using only parts confidently visible in both frames."""
+    la, lva, pa, pva = _pose_features(A["kpts"], A["kpt_scores"])
+    lb, lvb, pb, pvb = _pose_features(B["kpts"], B["kpt_scores"])
+    N, M = len(la), len(lb)
+    num = np.zeros((N, M), np.float32)
+    den = np.zeros((N, M), np.float32)
+    cnt = np.zeros((N, M), np.float32)
+    for j, (_, _, w) in enumerate(LIMBS_IDX):
+        cos = np.clip(la[:, j] @ lb[:, j].T, -1, 1)
+        s = np.exp(-np.arccos(cos) ** 2 / (2 * LIMB_SIGMA**2))
+        both = (lva[:, j][:, None] & lvb[:, j][None]).astype(np.float32)
+        num += w * s * both
+        den += w * both
+        cnt += both
+    for j, (_, w) in enumerate(ANCHORED_IDX):
+        d2 = ((pa[:, j][:, None] - pb[:, j][None]) ** 2).sum(-1)
+        s = np.exp(-d2 / (2 * ANCHOR_SIGMA**2))
+        both = (pva[:, j][:, None] & pvb[:, j][None]).astype(np.float32)
+        num += w * s * both
+        den += w * both
+        cnt += both
+    out = num / np.clip(den, 1e-6, None)
+    out[cnt < MIN_POSE_PARTS] = 0.0
+    return out.astype(np.float32)
 
 
 def sim_seg(A: dict, B: dict) -> np.ndarray:
