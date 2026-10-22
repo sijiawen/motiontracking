@@ -171,7 +171,7 @@ Calibration on real examples is how you'll learn where these limits actually bit
 ## Before you launch publicly
 
 - **Licence:** the Sapiens2 licence prohibits use "for biometric processing" and for surveillance, and requires compliance with biometric privacy laws (BIPA, CCPA, GDPR). This tool is designed to compare footage, not identify people. Have a lawyer confirm that framing before charging for it or scaling up.
-- **Privacy notice:** update the contact email in `web/index.html` (search for `hello@example.com`) and have the privacy text reviewed.
+- **Privacy notice:** the contact email (sj@creatorgen.ai) is in `web/index.html`; have the privacy text reviewed.
 - Uploads may contain other people's likenesses. Decide how long you keep videos, and add a scheduled cleanup if needed.
 
 ## Troubleshooting
