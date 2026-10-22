@@ -138,6 +138,14 @@ To tweak the analysis without re-running the GPU, change `similarity.py` and run
 
 People can paste a link (TikTok, Instagram, YouTube, X and most public video pages) instead of uploading. A small CPU function on Modal downloads it with [yt-dlp](https://github.com/yt-dlp/yt-dlp) at up to 720p, saves it to the `videos` bucket like an upload, then starts the GPU. The same 60-second / 50 MB limits apply. Some sites block downloads from cloud servers or need a login (private accounts, some YouTube videos); the user then sees a message asking them to upload the file instead. Run `supabase/add_video_links.sql` once to add the two link columns.
 
+## Accounts and payments
+
+- Everyone signs in with Google (Supabase Auth) before running a comparison. Free accounts get **3 comparisons per rolling 24 hours**.
+- Paid plans are Stripe subscriptions: **Creator** $24/mo or $228/yr (30 comparisons per billing month) and **Pro** $79/mo or $708/yr (150 per month). Prices and limits live in `backend/billing.py`; Checkout uses inline prices, so no products need creating in Stripe.
+- Failed runs don't count toward a limit. Your browser skips limits once you've logged in to `admin.html`.
+- Setup: run `supabase/add_accounts.sql`; turn on the Google provider in Supabase (Authentication → Sign In / Providers) and add your site to Authentication → URL Configuration; create the Modal secret `origin-billing` with `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `SITE_URL`; add a Stripe webhook to `<API URL>/stripe/webhook` for `checkout.session.completed` and `customer.subscription.created/updated/deleted`; save the Customer portal settings in Stripe.
+- Supabase's built-in email sender only reaches your own team, so email-link sign-in needs a custom SMTP provider (e.g. Resend) on a domain you control. That's why sign-in is Google-only for now.
+
 ## What's stored, and for how long
 
 - **Videos** (uploads and videos fetched from links) are kept in the `videos` bucket, along with every score, in the `comparisons` table.

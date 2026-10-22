@@ -33,7 +33,6 @@ SAMPLE_FPS = 2  # frames analysed per second of video
 MAX_SECONDS = 60
 MAX_BYTES = 50 * 1024 * 1024
 RESULT_IMAGES_DAYS = 7  # example images are deleted after this many days (videos are kept)
-DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", "0"))  # comparisons per visitor per day; 0 = unlimited
 BATCH = 8
 EARLY_STOP_ENABLED = False  # True = skip the more expensive tests once one scores EARLY_STOP+ (saves GPU)
 EARLY_STOP = 0.80
@@ -171,7 +170,7 @@ def download_models():
     secrets=secrets,
     timeout=900,
     scaledown_window=120,  # keep warm 2 min after a job, then stop paying
-    max_containers=2,  # hard cap on simultaneous GPUs (cost control)
+    max_containers=10,  # most comparisons that can run at the same time (launch-ready)
 )
 class Analyzer:
     @modal.enter()
@@ -746,15 +745,20 @@ def cleanup_result_images():
 
 web_image = (
     modal.Image.debian_slim(python_version="3.12")
-    .pip_install("supabase>=2.4", "fastapi[standard]")
+    .pip_install("supabase>=2.4", "fastapi[standard]", "stripe>=10")
     .add_local_file(here / "links.py", "/root/links.py")
+    .add_local_file(here / "billing.py", "/root/billing.py")
 )
+# STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET and SITE_URL (see README "Accounts and payments")
+billing_secret = modal.Secret.from_name("origin-billing")
 
 
-@app.function(image=web_image, secrets=secrets, min_containers=0)
+@app.function(image=web_image, secrets=secrets + [billing_secret], min_containers=0)
 @modal.asgi_app()
 def api():
     from fastapi import FastAPI, HTTPException, Request
+
+    import billing
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
 
@@ -770,6 +774,41 @@ def api():
     def is_admin(req: Request) -> bool:
         key = os.environ.get("ADMIN_KEY")
         return bool(key) and req.headers.get("x-admin-key") == key
+
+    # ---------- accounts ----------
+
+    def current_user(req: Request, required: bool = True):
+        """The signed-in user from the Supabase session token, or None."""
+        auth = req.headers.get("authorization") or ""
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        if token:
+            try:
+                u = supabase().auth.get_user(token).user
+                if u:
+                    return {"id": u.id, "email": u.email}
+            except Exception:
+                pass
+        if required:
+            raise HTTPException(401, {"code": "sign_in", "message": "Please sign in to run a comparison."})
+        return None
+
+    def get_profile(sb, user):
+        rows = sb.table("profiles").select("*").eq("id", user["id"]).limit(1).execute().data
+        if rows:
+            return rows[0]
+        prof = {"id": user["id"], "email": user["email"], "plan": "free"}
+        sb.table("profiles").upsert(prof).execute()
+        return prof
+
+    def usage(sb, user, profile):
+        plan = billing.effective_plan(profile)
+        since, resets = billing.usage_window(profile)
+        used = sb.table("comparisons").select("id", count="exact").eq("user_id", user["id"]) \
+            .in_("status", ["queued", "processing", "done"]).gte("created_at", since).execute().count or 0
+        limit = billing.PLANS[plan]["limit"]
+        return {"plan": plan, "plan_name": billing.PLANS[plan]["name"], "used": used, "limit": limit,
+                "remaining": max(0, limit - used), "resets_at": resets,
+                "window": billing.PLANS[plan]["window"]}
 
     class FileInfo(BaseModel):  # one video: either an uploaded file or a link
         name: str = ""
@@ -788,6 +827,8 @@ def api():
     def create(body: CreateBody, req: Request):
         import links
 
+        admin = is_admin(req)
+        user = current_user(req, required=not admin)
         if not body.consent:
             raise HTTPException(400, "Please confirm you have the right to upload these videos.")
         for side, f in (("A", body.a), ("B", body.b)):
@@ -803,17 +844,18 @@ def api():
                 raise HTTPException(400, f"Video {side} must be MP4, MOV, WebM, M4V, AVI or MKV.")
         sb = supabase()
         h = ip_hash(req)
-        if DAILY_LIMIT > 0 and not is_admin(req):
-            since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 86400))
-            used = sb.table("comparisons").select("id", count="exact").eq("ip_hash", h) \
-                .neq("status", "awaiting_upload").gte("created_at", since).execute().count or 0
-            if used >= DAILY_LIMIT:
-                raise HTTPException(429, f"You've used your {DAILY_LIMIT} free comparisons for today.")
+        if user and not admin:
+            u = usage(sb, user, get_profile(sb, user))
+            if u["remaining"] <= 0:
+                msg = (f"You've used your {u['limit']} free comparisons for today. Upgrade for more."
+                       if u["plan"] == "free" else
+                       f"You've used all {u['limit']} comparisons on your {u['plan_name']} plan this month.")
+                raise HTTPException(402, {"code": "limit_reached", "message": msg, **u})
 
         cid = str(uuid.uuid4())
         sides = {"a": body.a, "b": body.b}
         paths = {s: (None if f.url else f"{cid}/{s}{Path(f.name).suffix.lower()}") for s, f in sides.items()}
-        row = {"id": cid, "status": "awaiting_upload", "ip_hash": h,
+        row = {"id": cid, "status": "awaiting_upload", "ip_hash": h, "user_id": user["id"] if user else None,
                "user_agent": (req.headers.get("user-agent") or "")[:300], "consent_at": _now()}
         for s, f in sides.items():
             row.update({f"video_{s}_path": paths[s], f"video_{s}_url": f.url,
@@ -859,15 +901,20 @@ def api():
         return {"ok": True, "status": "queued"}
 
     @web.post("/rerun")
-    def rerun(body: AnalyzeBody):
+    def rerun(body: AnalyzeBody, req: Request):
         """Run a finished comparison again from its saved videos (regenerates the
-        example images, and picks up any improvements to the scoring)."""
+        example images, and picks up any improvements to the scoring). Only the
+        person who ran it (or the admin) can do this; it doesn't use up a run."""
+        admin = is_admin(req)
+        user = current_user(req, required=not admin)
         sb = supabase()
         try:
-            row = sb.table("comparisons").select("status,video_a_path,video_b_path") \
+            row = sb.table("comparisons").select("status,video_a_path,video_b_path,user_id") \
                 .eq("id", body.id).single().execute().data
         except Exception:
             raise HTTPException(404, "Comparison not found.")
+        if not admin and row.get("user_id") != user["id"]:
+            raise HTTPException(403, "Only the person who ran this comparison can regenerate it.")
         if row["status"] in ("queued", "processing"):
             return {"ok": True, "status": row["status"]}
         if not (row.get("video_a_path") and row.get("video_b_path")):
@@ -908,16 +955,108 @@ def api():
         rows = sb.table("comparisons").select(
             "id,created_at,status,error,overall_score,raw_score,verdict,mirrored,model_scores,tests,video_a_url,video_b_url,"
             "video_a_name,video_b_name,video_a_path,video_b_path,video_a_size,video_b_size,"
-            "video_a_duration,video_b_duration,ip_hash,user_agent,timings"
+            "video_a_duration,video_b_duration,ip_hash,user_agent,timings,user_id"
         ).order("created_at", desc=True).limit(min(limit, 500)).execute().data
+        ids = list({r["user_id"] for r in rows if r.get("user_id")})
+        emails = {}
+        if ids:
+            for pr in sb.table("profiles").select("id,email,plan").in_("id", ids).execute().data or []:
+                emails[pr["id"]] = pr
+        for r in rows:
+            pr = emails.get(r.get("user_id")) or {}
+            r["user_email"], r["user_plan"] = pr.get("email"), pr.get("plan")
         for r in rows:
             r["video_a_url"] = _signed_url(sb, "videos", r["video_a_path"])
             r["video_b_url"] = _signed_url(sb, "videos", r["video_b_path"])
         return rows
 
+    @web.get("/me")
+    def me(req: Request):
+        user = current_user(req)
+        sb = supabase()
+        prof = get_profile(sb, user)
+        return {"email": user["email"], **usage(sb, user, prof),
+                "status": prof.get("status"), "interval": prof.get("billing_interval"),
+                "period_end": prof.get("period_end"),
+                "has_billing": bool(prof.get("stripe_customer_id"))}
+
+    class CheckoutBody(BaseModel):
+        plan: str
+        interval: str = "month"
+
+    def stripe_client():
+        import stripe
+
+        key = os.environ.get("STRIPE_SECRET_KEY", "")
+        if not key.startswith(("sk_", "rk_")):
+            raise HTTPException(503, "Payments aren't set up yet. Please check back soon.")
+        stripe.api_key = key
+        return stripe
+
+    @web.post("/billing/checkout")
+    def checkout(body: CheckoutBody, req: Request):
+        user = current_user(req)
+        stripe = stripe_client()
+        sb = supabase()
+        prof = get_profile(sb, user)
+        if billing.effective_plan(prof) != "free" and prof.get("stripe_customer_id"):
+            raise HTTPException(400, "You already have a plan. Use 'Manage billing' to change it.")
+        try:
+            params = billing.checkout_params(body.plan, body.interval, user["id"], user["email"],
+                                             prof.get("stripe_customer_id"),
+                                             billing.site_url(req.headers.get("origin") or ""))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        session = stripe.checkout.Session.create(**params)
+        return {"url": session.url}
+
+    @web.post("/billing/portal")
+    def portal(req: Request):
+        user = current_user(req)
+        stripe = stripe_client()
+        prof = get_profile(supabase(), user)
+        if not prof.get("stripe_customer_id"):
+            raise HTTPException(400, "No billing account yet.")
+        session = stripe.billing_portal.Session.create(
+            customer=prof["stripe_customer_id"], return_url=billing.site_url(req.headers.get("origin") or ""))
+        return {"url": session.url}
+
+    @web.post("/stripe/webhook")
+    async def stripe_webhook(req: Request):
+        """Stripe tells us about new, renewed, changed and cancelled subscriptions."""
+        stripe = stripe_client()
+        payload = await req.body()
+        try:
+            event = stripe.Webhook.construct_event(
+                payload, req.headers.get("stripe-signature", ""), os.environ.get("STRIPE_WEBHOOK_SECRET", ""))
+        except Exception:
+            raise HTTPException(400, "Invalid signature.")
+        ev = event.to_dict() if hasattr(event, "to_dict") else dict(event)
+        etype, obj = ev["type"], ev["data"]["object"]
+        sb = supabase()
+        sub, user_id = None, None
+        if etype == "checkout.session.completed" and obj.get("subscription"):
+            user_id = obj.get("client_reference_id") or (obj.get("metadata") or {}).get("user_id")
+            sub = stripe.Subscription.retrieve(obj["subscription"])
+            sub = sub.to_dict() if hasattr(sub, "to_dict") else dict(sub)
+        elif etype in ("customer.subscription.created", "customer.subscription.updated",
+                       "customer.subscription.deleted"):
+            sub = obj
+            user_id = (obj.get("metadata") or {}).get("user_id")
+        if sub:
+            fields = billing.subscription_fields(sub)
+            if etype == "customer.subscription.deleted":
+                fields["plan"] = "free"
+            if user_id:
+                sb.table("profiles").update(fields).eq("id", user_id).execute()
+            elif fields.get("stripe_customer_id"):
+                sb.table("profiles").update(fields).eq("stripe_customer_id", fields["stripe_customer_id"]).execute()
+        return {"received": True}
+
     @web.get("/health")
     def health():
-        return {"ok": True, "daily_limit": DAILY_LIMIT, "max_seconds": MAX_SECONDS,
+        return {"ok": True, "free_per_day": billing.PLANS["free"]["limit"], "max_seconds": MAX_SECONDS,
                 "max_mb": MAX_BYTES // 2**20}
+
 
     return web

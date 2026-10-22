@@ -369,3 +369,96 @@ h1 {
   .nav .beta { display: none; }
   .wordmark { font-size: 22px; }
 }
+
+/* ---------- account ---------- */
+.btn-nav {
+  border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer;
+  font: 500 14px/1 var(--sans); padding: 9px 14px; border-radius: 8px;
+}
+.account { position: relative; }
+.account-btn {
+  display: flex; align-items: center; gap: 8px; border: 1px solid var(--line-2); background: var(--card);
+  border-radius: 99px; padding: 4px 12px 4px 4px; cursor: pointer; font: 500 13px var(--sans); color: var(--ink);
+}
+.avatar {
+  width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--accent); color: #fff; font: 600 12px var(--sans);
+}
+.account-menu {
+  position: absolute; right: 0; top: calc(100% + 8px); width: 260px; z-index: 30;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 8px;
+}
+.account-email { margin: 6px 10px 2px; font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; }
+.account-usage { margin: 0 10px 8px; font-size: 13px; color: var(--muted); }
+.menu-item {
+  display: block; width: 100%; text-align: left; border: 0; background: none; cursor: pointer;
+  font: 14px var(--sans); color: var(--ink); padding: 10px; border-radius: 8px;
+}
+.menu-item:hover { background: var(--well); }
+
+/* ---------- pricing ---------- */
+.pricing { max-width: 1200px; margin: 0 auto; padding: 64px 24px; border-top: 1px solid var(--line); }
+.pricing h2 { font: 400 40px/1.05 var(--serif); letter-spacing: -0.015em; margin: 0 0 8px; }
+.billing-toggle { display: inline-flex; gap: 4px; padding: 4px; background: var(--well); border-radius: 10px; margin: 20px 0 24px; }
+.billing-toggle button {
+  border: 0; background: transparent; cursor: pointer; font: 500 14px var(--sans); color: var(--ink-2);
+  padding: 9px 14px; border-radius: 7px;
+}
+.billing-toggle button[aria-checked="true"] { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.save { color: var(--accent); font-size: 12px; margin-left: 4px; }
+.plans { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.plan {
+  position: relative; display: flex; flex-direction: column; gap: 6px; padding: 24px;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.plan.featured { border: 2px solid var(--accent); }
+.plan-badge {
+  position: absolute; top: -11px; left: 22px; background: var(--accent); color: #fff;
+  font: 500 11px/1 var(--mono); text-transform: uppercase; letter-spacing: .06em; padding: 5px 8px; border-radius: 6px;
+}
+.plan h3 { margin: 0; font: 600 18px var(--sans); }
+.price { margin: 8px 0 0; }
+.price b { font: 400 40px/1 var(--serif); }
+.price span { color: var(--muted); margin-left: 4px; }
+.plan-sub { margin: 0; color: var(--muted); font-size: 13px; min-height: 18px; }
+.plan ul { list-style: none; padding: 0; margin: 14px 0 20px; display: grid; gap: 8px; flex: 1; font-size: 14px; color: var(--ink-2); }
+.plan li::before { content: "✓"; color: var(--accent); margin-right: 8px; font-weight: 600; }
+.plan .btn-primary, .plan .btn-ghost { justify-content: center; text-align: center; text-decoration: none; padding: 12px 16px; font-size: 15px; }
+
+/* ---------- modals & toast ---------- */
+.modal {
+  border: 0; border-radius: 16px; padding: 28px; width: min(440px, calc(100vw - 32px));
+  box-shadow: 0 20px 60px rgba(0,0,0,.25); color: var(--ink); background: var(--card);
+}
+.modal::backdrop { background: rgba(23, 32, 27, .45); }
+.modal h3 { margin: 0 0 8px; font: 400 28px/1.15 var(--serif); }
+.modal p { color: var(--ink-2); margin: 0 0 18px; }
+.modal-close {
+  position: absolute; top: 12px; right: 12px; width: 32px; height: 32px; border-radius: 50%;
+  border: 1px solid var(--line-2); background: var(--card); font-size: 18px; cursor: pointer;
+}
+.btn-google {
+  width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; cursor: pointer;
+  border: 1px solid var(--line-2); background: #fff; border-radius: 10px; padding: 13px; font: 600 15px var(--sans); color: #1f1f1f;
+}
+.btn-google:hover { background: #f7f7f7; }
+.modal-fine { font-size: 12.5px !important; color: var(--muted) !important; margin: 16px 0 0 !important; }
+.upgrade-options { display: grid; gap: 10px; }
+.upgrade-option {
+  display: flex; flex-direction: column; gap: 3px; text-align: left; cursor: pointer;
+  border: 1px solid var(--line-2); background: var(--card); border-radius: 10px; padding: 14px 16px; font: 14px var(--sans);
+}
+.upgrade-option:hover { border-color: var(--accent); background: var(--accent-soft); }
+.upgrade-option span { color: var(--muted); font-size: 13px; }
+.toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50;
+  background: var(--ink); color: #fff; padding: 12px 18px; border-radius: 10px; font-size: 14px; box-shadow: var(--shadow);
+  max-width: calc(100vw - 32px);
+}
+@media (max-width: 1000px) { .plans { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 600px) {
+  .plans { grid-template-columns: 1fr; }
+  .pricing { padding-left: 16px; padding-right: 16px; }
+  .pricing h2 { font-size: 32px; }
+  .nav a[href="#example"], .nav a[href="#method"] { display: none; }
+}

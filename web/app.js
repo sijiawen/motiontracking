@@ -43,8 +43,7 @@
   $$("[data-max-seconds]").forEach((n) => (n.textContent = CFG.MAX_SECONDS));
   $$("[data-max-mb]").forEach((n) => (n.textContent = CFG.MAX_MB));
   $("#year").textContent = new Date().getFullYear();
-  $("#quota span").textContent = DEMO ? "Demo mode · sample results"
-    : CFG.DAILY_LIMIT > 0 ? `${CFG.DAILY_LIMIT} free comparisons per day` : "Free during beta";
+  $("#quota span").textContent = DEMO ? "Demo mode · sample results" : "3 free comparisons per day";
 
   const fmtBytes = (b) => (b / 1048576).toFixed(1) + " MB";
   const fmtTime = (s) => {
@@ -205,20 +204,205 @@
     try { const k = localStorage.getItem("adminKey"); return k ? { "x-admin-key": k } : {}; } catch (_) { return {}; }
   }
 
+  function authHeader() {
+    const t = auth.session && auth.session.access_token;
+    return t ? { Authorization: `Bearer ${t}` } : {};
+  }
+
   async function api(path, opts = {}) {
     const res = await fetch(API + path, {
       ...opts,
-      headers: { "Content-Type": "application/json", ...adminHeader(), ...(opts.headers || {}) },
+      headers: { "Content-Type": "application/json", ...adminHeader(), ...authHeader(), ...(opts.headers || {}) },
     });
     let body = null;
     try { body = await res.json(); } catch (_) {}
     if (!res.ok) {
       let msg = body && (body.detail || body.error);
+      let code = null, data = null;
       if (Array.isArray(msg)) msg = msg.map((d) => `${(d.loc || []).join(".")}: ${d.msg}`).join("; ");
-      else if (msg && typeof msg === "object") msg = JSON.stringify(msg);
-      throw new Error(msg || `Request failed (${res.status})`);
+      else if (msg && typeof msg === "object") { code = msg.code || null; data = msg; msg = msg.message || JSON.stringify(msg); }
+      const err = new Error(msg || `Request failed (${res.status})`);
+      err.code = code || (res.status === 401 ? "sign_in" : null);
+      err.data = data;
+      throw err;
     }
     return body;
+  }
+
+  // ------------------------------------------------------------ accounts & billing
+  const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm";
+  const auth = { client: null, session: null, me: null, interval: "month" };
+  const store = {
+    get(k) { try { return sessionStorage.getItem(k); } catch (_) { return null; } },
+    set(k, v) { try { v == null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch (_) {} },
+  };
+
+  async function initAuth() {
+    if (DEMO || !CFG.SUPABASE_URL || !CFG.SUPABASE_ANON_KEY) return;
+    try {
+      const { createClient } = await import(SUPABASE_JS);
+      auth.client = createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY,
+        { auth: { persistSession: true, detectSessionInUrl: true, flowType: "pkce" } });
+      const { data } = await auth.client.auth.getSession();
+      auth.session = data.session;
+      auth.client.auth.onAuthStateChange((_ev, session) => {
+        const was = !!auth.session;
+        auth.session = session;
+        if (!!session !== was) refreshAccount();
+      });
+    } catch (e) {
+      console.error("Sign-in unavailable", e);
+    }
+    await refreshAccount();
+    restoreDraft();
+    const params = new URLSearchParams(location.search);
+    if (params.get("checkout") === "success") {
+      toast("Payment received. Your plan is being activated…");
+      for (let i = 0; i < 6 && auth.me && auth.me.plan === "free"; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        await refreshAccount();
+      }
+      if (auth.me && auth.me.plan !== "free") toast(`You're on ${auth.me.plan_name}. ${auth.me.limit} comparisons a month.`);
+      history.replaceState(null, "", location.pathname);
+    }
+    const pending = store.get("pendingPlan");
+    if (pending && auth.session) { store.set("pendingPlan", null); startCheckout(pending, store.get("pendingInterval") || "month"); }
+  }
+
+  async function refreshAccount() {
+    const signedIn = !!auth.session;
+    $("#signinBtn").hidden = signedIn || DEMO || !auth.client;
+    $("#account").hidden = !signedIn;
+    if (!signedIn) {
+      auth.me = null;
+      if (!DEMO) $("#quota span").textContent = "3 free comparisons per day · sign in to start";
+      return;
+    }
+    try { auth.me = await api("/me"); } catch (_) { auth.me = null; }
+    const me = auth.me;
+    const email = (me && me.email) || (auth.session.user && auth.session.user.email) || "";
+    $("#avatar").textContent = (email[0] || "?").toUpperCase();
+    $("#accountEmail").textContent = email;
+    if (me) {
+      $("#accountPlan").textContent = me.plan_name;
+      const period = me.window === "day" ? "today" : "this month";
+      $("#accountUsage").textContent = `${me.plan_name} plan · ${me.remaining} of ${me.limit} comparisons left ${period}`;
+      $("#quota span").textContent = `${me.remaining} of ${me.limit} left ${period}`;
+      $("#upgradeBtn").hidden = me.plan !== "free";
+      $("#billingBtn").hidden = !me.has_billing;
+    }
+  }
+
+  function openSignin(reason) {
+    if (reason) $("#signinReason").textContent = reason;
+    $("#signinModal").showModal();
+  }
+
+  function saveDraft() {
+    store.set("draft", JSON.stringify({ links: state.links, consent: $("#consent").checked }));
+  }
+  function restoreDraft() {
+    const raw = store.get("draft");
+    if (!raw) return;
+    store.set("draft", null);
+    try {
+      const d = JSON.parse(raw);
+      for (const k of ["a", "b"]) if (d.links && d.links[k]) {
+        $(`.link-input[data-side="${k}"]`).value = d.links[k];
+        setLink(k, d.links[k]);
+      }
+      if (d.consent) { $("#consent").checked = true; refresh(); }
+    } catch (_) {}
+  }
+
+  $("#googleBtn").addEventListener("click", async () => {
+    if (!auth.client) return toast("Sign-in isn't available right now. Please try again shortly.");
+    saveDraft();
+    const { error } = await auth.client.auth.signInWithOAuth({
+      provider: "google", options: { redirectTo: location.origin + location.pathname },
+    });
+    if (error) toast(error.message);
+  });
+  $("#signinBtn").addEventListener("click", () => openSignin());
+  $("#accountBtn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const m = $("#accountMenu");
+    m.hidden = !m.hidden;
+    $("#accountBtn").setAttribute("aria-expanded", String(!m.hidden));
+  });
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest("#account")) $("#accountMenu").hidden = true;
+  });
+  $("#signoutBtn").addEventListener("click", async () => {
+    if (auth.client) await auth.client.auth.signOut();
+    auth.session = null;
+    $("#accountMenu").hidden = true;
+    refreshAccount();
+  });
+  $("#upgradeBtn").addEventListener("click", () => {
+    $("#accountMenu").hidden = true;
+    $("#pricing").scrollIntoView({ behavior: "smooth" });
+  });
+  $("#billingBtn").addEventListener("click", async () => {
+    try { const r = await api("/billing/portal", { method: "POST" }); location.href = r.url; }
+    catch (err) { toast(err.message); }
+  });
+
+  async function startCheckout(plan, interval) {
+    if (!auth.session) {
+      store.set("pendingPlan", plan);
+      store.set("pendingInterval", interval);
+      return openSignin(`Sign in first, then you'll go straight to checkout for ${plan === "pro" ? "Pro" : "Creator"}.`);
+    }
+    try {
+      toast("Opening secure checkout…");
+      const r = await api("/billing/checkout", { method: "POST", body: JSON.stringify({ plan, interval }) });
+      location.href = r.url;
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  // pricing section
+  $$(".billing-toggle [data-interval]").forEach((b) => b.addEventListener("click", () => {
+    auth.interval = b.dataset.interval;
+    $$(".billing-toggle [data-interval]").forEach((x) => x.setAttribute("aria-checked", String(x === b)));
+    $$("[data-price-month]").forEach((el) => (el.textContent = el.dataset[auth.interval === "year" ? "priceYear" : "priceMonth"]));
+    $$("[data-sub-month]").forEach((el) => (el.textContent = el.dataset[auth.interval === "year" ? "subYear" : "subMonth"]));
+  }));
+  $$("#pricing [data-plan]").forEach((b) => b.addEventListener("click", () => {
+    const plan = b.dataset.plan;
+    if (plan === "free") {
+      if (!auth.session && !DEMO) return openSignin();
+      return $("#tool").scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    if (DEMO) return toast("Checkout is turned off in demo mode.");
+    startCheckout(plan, auth.interval);
+  }));
+  $$("#upgradeModal [data-plan]").forEach((b) => b.addEventListener("click", () => {
+    $("#upgradeModal").close();
+    startCheckout(b.dataset.plan, "month");
+  }));
+  $("#seePlans").addEventListener("click", () => $("#upgradeModal").close());
+
+  function openUpgrade(err) {
+    const d = (err && err.data) || {};
+    if (d.plan && d.plan !== "free") {
+      $("#upgradeTitle").textContent = "You've used this month's comparisons";
+      $("#upgradeReason").textContent = d.plan === "pro"
+        ? "Your Pro plan resets at the start of your next billing period. Need more? Email sj@creatorgen.ai."
+        : "Upgrade to Pro for 150 a month, or wait for your plan to reset.";
+    }
+    $("#upgradeModal").showModal();
+  }
+
+  let toastTimer = null;
+  function toast(msg) {
+    const t = $("#toast");
+    t.textContent = msg;
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => (t.hidden = true), 4500);
   }
 
   function uploadXHR(slot, file, onProgress) {
@@ -262,6 +446,9 @@
     ev.preventDefault();
     if ($("#submit").disabled) return;
     if (DEMO) return runDemo();
+    if (!auth.session && !Object.keys(adminHeader()).length) {
+      return openSignin("Create a free account to run your comparison. You get 3 a day, no card needed.");
+    }
     const sideBody = (k) => state.files[k]
       ? { name: state.files[k].name, size: state.files[k].size, type: state.files[k].type }
       : { url: state.links[k] };
@@ -285,8 +472,11 @@
       await api("/analyze", { method: "POST", body: JSON.stringify({ id: created.id }) });
       history.replaceState(null, "", `?id=${created.id}`);
       poll(created.id);
+      refreshAccount();
     } catch (err) {
       resetToForm();
+      if (err.code === "limit_reached") { openUpgrade(err); refreshAccount(); return; }
+      if (err.code === "sign_in") { openSignin(); return; }
       showError(err.message);
     }
   });
@@ -595,6 +785,8 @@
     };
     step();
   }
+
+  initAuth();
 
   // ------------------------------------------------------------ deep link
   if (params.get("id") && !DEMO) poll(params.get("id"));
