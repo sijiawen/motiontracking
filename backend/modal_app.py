@@ -764,7 +764,8 @@ def api():
 
     web = FastAPI(title="Origin video comparison API")
     origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",")]
-    web.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
+    web.add_middleware(CORSMiddleware, allow_origins=origins, allow_origin_regex=billing.TRUSTED_ORIGIN_REGEX,
+                       allow_methods=["*"], allow_headers=["*"])
 
     def ip_hash(req: Request) -> str:
         ip = (req.headers.get("x-forwarded-for") or req.client.host or "").split(",")[0].strip()

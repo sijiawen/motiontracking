@@ -116,5 +116,17 @@ def checkout_params(plan: str, interval: str, user_id: str, email: str | None,
     return params
 
 
-def site_url(default: str = "") -> str:
-    return (os.environ.get("SITE_URL") or default).rstrip("/") + "/"
+# Sites allowed to call the API from a browser and to receive Stripe redirects.
+TRUSTED_ORIGIN_REGEX = (r"^https://([a-z0-9-]+\.)*creatorgen\.ai$"
+                        r"|^https://comparevideo\.vercel\.app$"
+                        r"|^http://(localhost|127\.0\.0\.1)(:\d+)?$")
+
+
+def site_url(origin: str = "") -> str:
+    """Where Stripe sends people back: the site they came from if it's one of
+    ours (so creatorgen.ai and vercel.app both work), else SITE_URL."""
+    import re
+    origin = (origin or "").rstrip("/")
+    if origin and re.match(TRUSTED_ORIGIN_REGEX, origin):
+        return origin + "/"
+    return (os.environ.get("SITE_URL") or origin).rstrip("/") + "/"
