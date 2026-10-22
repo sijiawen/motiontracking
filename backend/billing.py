@@ -130,3 +130,19 @@ def site_url(origin: str = "") -> str:
     if origin and re.match(TRUSTED_ORIGIN_REGEX, origin):
         return origin + "/"
     return (os.environ.get("SITE_URL") or origin).rstrip("/") + "/"
+
+
+def key_kind(key: str | None) -> str:
+    """Describe a Stripe key without revealing it (shown on /health for setup checks)."""
+    k = key or ""
+    if not k:
+        return "missing"
+    for prefix, label in (("sk_test_", "secret key (test)"), ("sk_live_", "secret key (live)"),
+                          ("rk_test_", "restricted key (test)"), ("rk_live_", "restricted key (live)"),
+                          ("pk_", "publishable key (wrong one: use the Secret key)"),
+                          ("whsec_", "webhook secret (wrong one: use the Secret key)")):
+        if k.startswith(prefix):
+            return label
+    if k.strip() != k or k[:1] in "\"'":
+        return "has extra spaces or quotes around it"
+    return f"unrecognised ({len(k)} characters, starts with '{k[:3]}')"

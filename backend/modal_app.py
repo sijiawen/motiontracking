@@ -988,7 +988,7 @@ def api():
     def stripe_client():
         import stripe
 
-        key = os.environ.get("STRIPE_SECRET_KEY", "")
+        key = os.environ.get("STRIPE_SECRET_KEY", "").strip().strip("'\"").strip()
         if not key.startswith(("sk_", "rk_")):
             raise HTTPException(503, "Payments aren't set up yet. Please check back soon.")
         stripe.api_key = key
@@ -1057,7 +1057,10 @@ def api():
     @web.get("/health")
     def health():
         return {"ok": True, "free_per_day": billing.PLANS["free"]["limit"], "max_seconds": MAX_SECONDS,
-                "max_mb": MAX_BYTES // 2**20}
+                "max_mb": MAX_BYTES // 2**20,
+                "stripe_key": billing.key_kind(os.environ.get("STRIPE_SECRET_KEY")),
+                "stripe_webhook_secret": "set" if os.environ.get("STRIPE_WEBHOOK_SECRET", "").startswith("whsec_")
+                                         else billing.key_kind(os.environ.get("STRIPE_WEBHOOK_SECRET"))}
 
 
     return web
