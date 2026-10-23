@@ -198,7 +198,7 @@ Run the scoring math tests locally with `pip install pytest && python -m pytest 
 
 ## Creator waitlist
 
-Creators who want their whole content library indexed and watched for copies can join the waitlist on the landing page ("I'm a creator: scan my content library"). Each sign-up stores their email, channels, library size, whether they've seen copies, notes, and whether they want a hand-checked scan of the ad libraries.
+Creators who want their whole content library indexed and watched for copies can join the waitlist on the landing page ("I'm a creator: scan my content library"). Each sign-up stores their email, channels, library size, whether they've seen copies, notes, and whether they give permission to search for copies of their content and contact them about what we find.
 
 - Setup: run `supabase/add_waitlist.sql` once, then deploy the backend.
 - See sign-ups in Supabase → Table Editor → `waitlist_overview`, or at the bottom of `admin.html` (with a CSV download).

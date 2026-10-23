@@ -80,8 +80,8 @@
         const wl = await res.json();
         const ch = (r) => Object.entries(r.channels || {}).map(([k, v]) => `${k}: ${v}`).join(" · ");
         $("#wlSection").hidden = false;
-        $("#wlSummary").textContent = `${wl.length} creators · ${wl.filter((r) => r.manual_check).length} want a hand-checked scan · ${wl.filter((r) => r.seen_copies === "yes").length} have seen copies`;
-        $("#wlList").innerHTML = `<tr><th>When</th><th>Creator</th><th>Channels</th><th>Videos</th><th>Seen copies</th><th>Hand scan</th><th>Notes</th></tr>` +
+        $("#wlSummary").textContent = `${wl.length} creators · ${wl.filter((r) => r.manual_check).length} gave permission to search · ${wl.filter((r) => r.seen_copies === "yes").length} have seen copies`;
+        $("#wlList").innerHTML = `<tr><th>When</th><th>Creator</th><th>Channels</th><th>Videos</th><th>Seen copies</th><th>Can search</th><th>Notes</th></tr>` +
           wl.map((r) => `<tr>
             <td>${new Date(r.created_at).toLocaleString()}</td>
             <td><b>${esc(r.name || "")}</b><br><a href="mailto:${esc(r.email)}">${esc(r.email)}</a></td>

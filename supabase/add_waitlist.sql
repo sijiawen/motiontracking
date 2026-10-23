@@ -11,7 +11,7 @@ create table if not exists public.waitlist (
   library_size  text,                                -- under_50 | 50_200 | 200_1000 | over_1000
   seen_copies   text,                                -- yes | not_sure | no
   notes         text,
-  manual_check  boolean not null default false,      -- wants a hand-checked scan
+  manual_check  boolean not null default false,      -- gave permission to search for copies and contact them
   status        text not null default 'new',         -- your own notes: new | contacted | scanned ...
   user_id       uuid,
   source        text,

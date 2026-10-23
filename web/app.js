@@ -540,7 +540,7 @@
     try {
       if (!DEMO) await api("/waitlist", { method: "POST", body: JSON.stringify(body) });
       $("#waitlistDoneText").textContent = body.manual_check
-        ? "Thanks! I'll check the ad libraries for your channels by hand and email you what I find. We'll also let you know when automatic scanning opens."
+        ? "Thanks! We'll start looking for copies of your content and email you what we find. We'll also let you know when automatic scanning opens."
         : "We'll email you when scanning opens for your channels.";
       $("#waitlistFields").hidden = true;
       $("#waitlistDone").hidden = false;
