@@ -194,3 +194,12 @@ Calibration on real examples is how you'll learn where these limits actually bit
 | Error mentioning a missing config file | The Sapiens2 repo changed. Pin it by editing the `git clone` line in `modal_app.py` to a known commit. |
 
 Run the scoring math tests locally with `pip install pytest && python -m pytest backend -q`.
+
+
+## Creator waitlist
+
+Creators who want their whole content library indexed and watched for copies can join the waitlist on the landing page ("I'm a creator: scan my content library"). Each sign-up stores their email, channels, library size, whether they've seen copies, notes, and whether they want a hand-checked scan of the ad libraries.
+
+- Setup: run `supabase/add_waitlist.sql` once, then deploy the backend.
+- See sign-ups in Supabase → Table Editor → `waitlist_overview`, or at the bottom of `admin.html` (with a CSV download).
+- Signing up again with the same email updates the existing entry. Use the `status` column for your own notes (new, contacted, scanned…).

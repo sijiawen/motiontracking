@@ -40,6 +40,12 @@
     <p class="form-error" id="err" hidden></p>
     <div class="summary" id="summary"></div>
     <div class="table-wrap"><table class="list" id="list" hidden></table></div>
+    <section id="wlSection" hidden>
+      <h1 style="margin-top:48px">Creator waitlist</h1>
+      <p class="muted" id="wlSummary"></p>
+      <a class="btn-ghost" id="wlCsv" href="#">Download waitlist CSV</a>
+      <div class="table-wrap"><table class="list" id="wlList"></table></div>
+    </section>
   </div>
   <script src="config.js"></script>
   <script>
@@ -60,11 +66,38 @@
         if (!res.ok) throw new Error(res.status === 401 ? "Wrong admin key." : `Error ${res.status}`);
         rows = await res.json();
         render();
+        loadWaitlist(key);
       } catch (err) {
         $("#err").textContent = API ? err.message : "Set API_URL in config.js first.";
         $("#err").hidden = false;
       }
     });
+
+    async function loadWaitlist(key) {
+      try {
+        const res = await fetch(`${API}/admin/waitlist`, { headers: { "x-admin-key": key } });
+        if (!res.ok) return;
+        const wl = await res.json();
+        const ch = (r) => Object.entries(r.channels || {}).map(([k, v]) => `${k}: ${v}`).join(" · ");
+        $("#wlSection").hidden = false;
+        $("#wlSummary").textContent = `${wl.length} creators · ${wl.filter((r) => r.manual_check).length} want a hand-checked scan · ${wl.filter((r) => r.seen_copies === "yes").length} have seen copies`;
+        $("#wlList").innerHTML = `<tr><th>When</th><th>Creator</th><th>Channels</th><th>Videos</th><th>Seen copies</th><th>Hand scan</th><th>Notes</th></tr>` +
+          wl.map((r) => `<tr>
+            <td>${new Date(r.created_at).toLocaleString()}</td>
+            <td><b>${esc(r.name || "")}</b><br><a href="mailto:${esc(r.email)}">${esc(r.email)}</a></td>
+            <td class="muted">${Object.entries(r.channels || {}).map(([k, v]) => `${esc(k)}: ${esc(v)}`).join("<br>")}</td>
+            <td class="muted">${esc((r.library_size || "").replace(/_/g, " "))}</td>
+            <td class="muted">${esc((r.seen_copies || "").replace("_", " "))}</td>
+            <td>${r.manual_check ? "<b>yes</b>" : ""}</td>
+            <td class="muted">${esc(r.notes || "")}${r.source ? `<br>from ${esc(r.source)}` : ""}</td>
+          </tr>`).join("");
+        const csv = [["created_at","name","email","channels","library_size","seen_copies","manual_check","notes","source"].join(",")]
+          .concat(wl.map((r) => [r.created_at, r.name || "", r.email, ch(r), r.library_size || "", r.seen_copies || "", r.manual_check, r.notes || "", r.source || ""]
+            .map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")));
+        $("#wlCsv").href = URL.createObjectURL(new Blob([csv.join("\n")], { type: "text/csv" }));
+        $("#wlCsv").download = "waitlist.csv";
+      } catch (_) {}
+    }
 
     function render() {
       const done = rows.filter((r) => r.status === "done");

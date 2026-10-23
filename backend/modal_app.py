@@ -748,6 +748,7 @@ web_image = (
     .pip_install("supabase>=2.4", "fastapi[standard]", "stripe>=10")
     .add_local_file(here / "links.py", "/root/links.py")
     .add_local_file(here / "billing.py", "/root/billing.py")
+    .add_local_file(here / "waitlist.py", "/root/waitlist.py")
 )
 # STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET and SITE_URL (see README "Accounts and payments")
 billing_secret = modal.Secret.from_name("origin-billing")
@@ -980,6 +981,52 @@ def api():
                 "status": prof.get("status"), "interval": prof.get("billing_interval"),
                 "period_end": prof.get("period_end"),
                 "has_billing": bool(prof.get("stripe_customer_id"))}
+
+    # ---------- creator waitlist ----------
+
+    @web.post("/waitlist")
+    async def join_waitlist(req: Request):
+        """Creators who want their content library indexed and watched for copies."""
+        import waitlist
+        from datetime import datetime, timedelta, timezone
+
+        try:
+            data = await req.json()
+        except Exception:
+            raise HTTPException(400, "Please fill in the form.")
+        if not isinstance(data, dict):
+            raise HTTPException(400, "Please fill in the form.")
+        if data.get("website"):  # hidden field only bots fill in
+            return {"ok": True}
+        try:
+            row = waitlist.validate(data)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        sb = supabase()
+        ih = ip_hash(req)
+        since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        recent = sb.table("waitlist").select("id", count="exact").eq("ip_hash", ih) \
+            .gte("updated_at", since).execute().count or 0
+        if recent >= 10:
+            raise HTTPException(429, "Too many sign-ups from your network. Please try again later.")
+        user = current_user(req, required=False)
+        row.update({
+            "ip_hash": ih,
+            "user_agent": (req.headers.get("user-agent") or "")[:300],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+        if user:
+            row["user_id"] = user["id"]
+        sb.table("waitlist").upsert(row, on_conflict="email").execute()
+        return {"ok": True}
+
+    @web.get("/admin/waitlist")
+    def admin_waitlist(req: Request, limit: int = 500):
+        if not is_admin(req):
+            raise HTTPException(401, "Wrong admin key.")
+        return supabase().table("waitlist").select(
+            "created_at,updated_at,email,name,channels,library_size,seen_copies,notes,manual_check,status,source"
+        ).order("created_at", desc=True).limit(min(limit, 2000)).execute().data
 
     class CheckoutBody(BaseModel):
         plan: str

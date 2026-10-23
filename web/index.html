@@ -19,6 +19,7 @@
         <span data-app-name>Creatorgen</span><span class="dot">.</span>
       </a>
       <nav class="nav">
+        <a href="#creators" class="nav-creators">For creators</a>
         <a href="#example">Example</a>
         <a href="#method">Method</a>
         <a href="#pricing">Pricing</a>
@@ -50,6 +51,11 @@
           <div><dt>7</dt><dd>AI models</dd></div>
           <div><dt>2 fps</dt><dd>Frame-by-frame</dd></div>
         </dl>
+        <a class="creator-cta" href="#creators">
+          <span class="creator-cta-tag">New</span>
+          <span><b>I'm a creator: scan my content library.</b> Join the waitlist and we'll watch ads and reposts for copies of your videos.</span>
+          <span class="creator-cta-arrow" aria-hidden="true">→</span>
+        </a>
       </div>
 
       <div class="tool card" id="tool">
@@ -169,6 +175,68 @@
       </div>
     </section>
 
+    <section class="creators" id="creators">
+      <div class="creators-copy">
+        <p class="eyebrow"><span>For creators</span> Waitlist</p>
+        <h2>Find copies of your videos before your fans do.</h2>
+        <p>Most creators never find out their videos were reused in someone else's ad. When library scanning opens, add your channels and we'll index every video you've posted, then keep watching Meta, TikTok and Google ads and reposts for copies, even when the face, voice or background has been swapped.</p>
+        <ol class="creators-steps">
+          <li><span><b>Add your channels.</b> TikTok, Instagram, YouTube or anywhere else you post.</span></li>
+          <li><span><b>We index your library.</b> Every video, by body motion, scene and script.</span></li>
+          <li><span><b>We watch in the background.</b> You hear from us when something matches, with the evidence side by side.</span></li>
+        </ol>
+        <p class="creators-offer">The first 50 creators get a hand-checked scan of the ad libraries from our founder, <a href="mailto:sj@creatorgen.ai">Si Jia</a>.</p>
+      </div>
+
+      <form class="card creators-form" id="waitlistForm" novalidate>
+        <div id="waitlistFields">
+          <h3>Join the waitlist</h3>
+          <label class="wl-field"><span>Email <i>*</i></span>
+            <input class="wl-input" type="email" name="email" id="wlEmail" autocomplete="email" required placeholder="you@example.com" /></label>
+          <label class="wl-field"><span>Name</span>
+            <input class="wl-input" type="text" name="name" autocomplete="name" placeholder="Your name or creator name" /></label>
+          <fieldset class="wl-channels">
+            <legend>Your channels <i>*</i> <small>(at least one)</small></legend>
+            <label><span>TikTok</span><input class="wl-input" name="tiktok" placeholder="@handle or link" /></label>
+            <label><span>Instagram</span><input class="wl-input" name="instagram" placeholder="@handle or link" /></label>
+            <label><span>YouTube</span><input class="wl-input" name="youtube" placeholder="@channel or link" /></label>
+            <label><span>X</span><input class="wl-input" name="x" placeholder="@handle" /></label>
+            <label><span>Other</span><input class="wl-input" name="other" placeholder="Website, Twitch, Snapchat…" /></label>
+          </fieldset>
+          <div class="wl-row">
+            <label class="wl-field"><span>Videos posted</span>
+              <select class="wl-input" name="library_size">
+                <option value="">Choose…</option>
+                <option value="under_50">Under 50</option>
+                <option value="50_200">50 to 200</option>
+                <option value="200_1000">200 to 1,000</option>
+                <option value="over_1000">Over 1,000</option>
+              </select></label>
+            <label class="wl-field"><span>Seen copies of your content?</span>
+              <select class="wl-input" name="seen_copies">
+                <option value="">Choose…</option>
+                <option value="yes">Yes</option>
+                <option value="not_sure">Not sure</option>
+                <option value="no">No</option>
+              </select></label>
+          </div>
+          <label class="wl-field"><span>Anything we should know?</span>
+            <textarea class="wl-input" name="notes" rows="3" placeholder="For example, a link to a copy you've seen"></textarea></label>
+          <label class="wl-hp" aria-hidden="true">Website <input name="website" tabindex="-1" autocomplete="off" /></label>
+          <label class="consent"><input type="checkbox" name="manual_check" />
+            <span>Yes, check the ad libraries for me by hand (first 50 creators).</span></label>
+          <p class="wl-error" id="wlError" role="alert" hidden></p>
+          <button class="btn-primary wl-submit" type="submit" id="wlSubmit">Join the waitlist</button>
+          <p class="modal-fine">We'll only use this to contact you about scanning your content. See the <a href="#privacy">privacy notice</a>.</p>
+        </div>
+        <div class="wl-done" id="waitlistDone" hidden>
+          <h3>You're on the list.</h3>
+          <p id="waitlistDoneText">We'll email you when scanning opens for your channels.</p>
+          <p>Already have a video you think was copied? <a href="#tool">Compare it now</a>, 3 free checks a day.</p>
+        </div>
+      </form>
+    </section>
+
     <section class="showcase" id="example">
       <div class="method-head">
         <p class="eyebrow"><span>Example</span> Same moves, different face</p>
@@ -283,7 +351,7 @@
 
     <section class="privacy" id="privacy">
       <h2>Privacy notice</h2>
-      <p>Videos you upload, and the analysis results, are stored privately so we can run the comparison, show you the result, and review and improve the system. They are not public and are not sold or shared. Your result is visible to anyone you give its link to. When you sign in with Google we keep your email address to run your account and usage limits. Payments are handled by Stripe; we never see your card details. We also store a one-way hash of your network address to prevent abuse, not the address itself.</p>
+      <p>Videos you upload, and the analysis results, are stored privately so we can run the comparison, show you the result, and review and improve the system. They are not public and are not sold or shared. Your result is visible to anyone you give its link to. When you sign in with Google we keep your email address to run your account and usage limits. If you join the creator waitlist, we keep the email and channels you give us to contact you about scanning your content. Payments are handled by Stripe; we never see your card details. We also store a one-way hash of your network address to prevent abuse, not the address itself.</p>
       <p>Only upload videos you have the right to use. The service compares footage; it does not identify who a person is. To have your uploads deleted, email <a href="mailto:sj@creatorgen.ai" id="contactEmail">sj@creatorgen.ai</a> with your result link.</p>
     </section>
   </main>

@@ -283,6 +283,7 @@
     const me = auth.me;
     const email = (me && me.email) || (auth.session.user && auth.session.user.email) || "";
     $("#avatar").textContent = (email[0] || "?").toUpperCase();
+    if (email && !$("#wlEmail").value) $("#wlEmail").value = email;
     $("#accountEmail").textContent = email;
     if (me) {
       $("#accountPlan").textContent = me.plan_name;
@@ -512,6 +513,45 @@
       onProgress(1);
     }
   }
+
+  // ------------------------------------------------------------ creator waitlist
+  $("#waitlistForm").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = ev.target;
+    const val = (n) => (f.elements[n].value || "").trim();
+    const err = $("#wlError");
+    err.hidden = true;
+    const channels = {};
+    for (const k of ["tiktok", "instagram", "youtube", "x", "other"]) if (val(k)) channels[k] = val(k);
+    const show = (msg) => { err.textContent = msg; err.hidden = false; };
+    if (!/^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$/.test(val("email"))) return show("Please enter a valid email address.");
+    if (!Object.keys(channels).length) return show("Please add at least one channel, like your TikTok or YouTube.");
+    const q = new URLSearchParams(location.search);
+    const source = [q.get("utm_source"), q.get("ref"), document.referrer && new URL(document.referrer).hostname]
+      .filter(Boolean).join(" / ").slice(0, 200);
+    const body = {
+      email: val("email"), name: val("name"), channels,
+      library_size: val("library_size"), seen_copies: val("seen_copies"), notes: val("notes"),
+      manual_check: f.elements.manual_check.checked, website: val("website"), source,
+    };
+    const btn = $("#wlSubmit");
+    btn.disabled = true;
+    btn.textContent = "Joining…";
+    try {
+      if (!DEMO) await api("/waitlist", { method: "POST", body: JSON.stringify(body) });
+      $("#waitlistDoneText").textContent = body.manual_check
+        ? "Thanks! I'll check the ad libraries for your channels by hand and email you what I find. We'll also let you know when automatic scanning opens."
+        : "We'll email you when scanning opens for your channels.";
+      $("#waitlistFields").hidden = true;
+      $("#waitlistDone").hidden = false;
+      $("#creators").scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (e) {
+      show(e.message || "Something went wrong. Please try again.");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Join the waitlist";
+    }
+  });
 
   // ------------------------------------------------------------ submit
   $("#form").addEventListener("submit", async (ev) => {
