@@ -255,6 +255,7 @@
     }
     await refreshAccount();
     restoreDraft();
+    initGoogleButton();
     const params = new URLSearchParams(location.search);
     if (params.get("checkout") === "success") {
       toast("Payment received. Your plan is being activated…");
@@ -323,6 +324,77 @@
     });
     if (error) toast(error.message);
   });
+  $("#signinFallback").addEventListener("click", (e) => { e.preventDefault(); $("#googleBtn").click(); });
+
+  // Google's own "Sign in with Google" button. It opens a Google popup on our
+  // own domain, so Google shows compare.creatorgen.ai (or "Creatorgen" once the
+  // brand is verified) instead of the Supabase address, and the page doesn't
+  // reload. Falls back to the redirect button above if it can't load.
+  const gsi = { ready: false, rawNonce: null };
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const el = document.createElement("script");
+      el.src = src; el.async = true; el.onload = resolve; el.onerror = reject;
+      document.head.appendChild(el);
+    });
+  }
+  async function sha256hex(text) {
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  async function renderGoogleButton() {
+    // a fresh nonce each time ties Google's answer to this one sign-in
+    const raw = new Uint8Array(16);
+    crypto.getRandomValues(raw);
+    gsi.rawNonce = Array.from(raw).map((b) => b.toString(16).padStart(2, "0")).join("");
+    window.google.accounts.id.initialize({
+      client_id: CFG.GOOGLE_CLIENT_ID,
+      callback: onGoogleCredential,
+      nonce: await sha256hex(gsi.rawNonce),
+      ux_mode: "popup",
+      auto_select: false,
+      context: "signin",
+    });
+    const box = $("#gsiBtn");
+    box.innerHTML = "";
+    window.google.accounts.id.renderButton(box, {
+      type: "standard", theme: "outline", size: "large", text: "continue_with",
+      shape: "rectangular", logo_alignment: "center", width: 320,
+    });
+  }
+  async function initGoogleButton() {
+    if (DEMO || !CFG.GOOGLE_CLIENT_ID || !auth.client || !window.crypto || !crypto.subtle) return;
+    try {
+      await loadScript("https://accounts.google.com/gsi/client");
+      await renderGoogleButton();
+      gsi.ready = true;
+      $("#gsiBtn").hidden = false;
+      $("#googleBtn").hidden = true;
+      $("#redirectNote").hidden = true;
+      $("#signinFallbackWrap").hidden = false;
+    } catch (e) {
+      console.warn("Google button unavailable, using redirect sign-in", e);
+    }
+  }
+  async function onGoogleCredential(resp) {
+    const { error } = await auth.client.auth.signInWithIdToken({
+      provider: "google", token: resp.credential, nonce: gsi.rawNonce,
+    });
+    if (error) {
+      toast("Sign-in didn't work. Please try again.");
+      console.error(error);
+      renderGoogleButton();
+      return;
+    }
+    const { data } = await auth.client.auth.getSession();
+    auth.session = data.session;
+    if ($("#signinModal").open) $("#signinModal").close();
+    await refreshAccount();
+    toast("You're signed in.");
+    const pending = store.get("pendingPlan");
+    if (pending) { store.set("pendingPlan", null); startCheckout(pending, store.get("pendingInterval") || "month"); }
+  }
+
   $("#signinBtn").addEventListener("click", () => openSignin());
   $("#accountBtn").addEventListener("click", (e) => {
     e.stopPropagation();

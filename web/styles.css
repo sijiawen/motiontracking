@@ -462,3 +462,6 @@ h1 {
   .pricing h2 { font-size: 32px; }
   .nav a[href="#example"], .nav a[href="#method"] { display: none; }
 }
+
+.gsi-btn { display: flex; justify-content: center; min-height: 44px; margin-top: 4px; }
+.gsi-btn[hidden] { display: none; }

@@ -7,6 +7,9 @@ window.APP_CONFIG = {
   // From Supabase -> Project Settings -> API
   SUPABASE_URL: "https://jfxvakeezsdrugbsqnea.supabase.co",
   SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpmeHZha2VlenNkcnVnYnNxbmVhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0NDEyNDQsImV4cCI6MjEwODAxNzI0NH0.F800RweJULauFKD6BZrCfscdPbOFGfrb8xjzlXjYROo",
+  // Google Cloud -> Google Auth Platform -> Clients -> your Web client -> Client ID.
+  // Public (not a secret). Leave empty to use the older redirect sign-in.
+  GOOGLE_CLIENT_ID: "",
   MAX_SECONDS: 60,
   MAX_MB: 50,
   DAILY_LIMIT: 0, // per visitor per day; 0 = unlimited (also change it in backend/modal_app.py)
