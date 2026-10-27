@@ -769,7 +769,12 @@ class Analyzer:
         if background is not None:
             parts.append(f"Background match {round(background * 100)}%")
         d.text((24, head + H + 26), "   ·   ".join(parts), fill=(255, 255, 255), font=f_big)
-        d.text((W - 300, head + H + 34), "compare.creatorgen.ai", fill=(200, 222, 210), font=f_lab)
+        url = "compare.creatorgen.ai"
+        try:
+            url_w = d.textlength(url, font=f_lab)
+        except Exception:
+            url_w = 18 * len(url)
+        d.text((W - 24 - url_w, head + H + 34), url, fill=(200, 222, 210), font=f_lab)
         import io
         buf = io.BytesIO()
         card.save(buf, "PNG")
