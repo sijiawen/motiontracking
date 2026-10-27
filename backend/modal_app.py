@@ -647,6 +647,57 @@ class Analyzer:
         }
 
 
+    @modal.method()
+    def pose_photo(self, image_bytes: bytes, dim: float = 0.7, min_conf: float = 0.7) -> bytes:
+        """Draw the pose skeleton on every clearly visible person in a photo or
+        screenshot (e.g. an original and a copy side by side). Returns a PNG."""
+        import cv2
+        import numpy as np
+        import torch
+        from PIL import Image
+        from pose_render_utils import visualize_keypoints
+
+        img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError("Couldn't read that image.")
+        rgb_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        inp = self.det_proc(images=[rgb_pil], return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            pred = self.det(**inp)
+        res = self.det_proc.post_process_object_detection(
+            pred, target_sizes=torch.tensor([img.shape[:2]], device=self.device), threshold=min_conf)[0]
+        person = res["labels"] == 1
+        boxes = res["boxes"][person].cpu().numpy()
+        h, w = img.shape[:2]
+        boxes = [b for b in boxes if (b[2] - b[0]) * (b[3] - b[1]) > 0.01 * h * w]
+        print(f"Found {len(boxes)} people")
+        if not boxes:
+            raise ValueError("No people found in that image.")
+        kpts, scores = self._pose([img] * len(boxes), boxes)
+        meta = self.models["pose"].pose_metainfo
+        rgb = (cv2.cvtColor(img, cv2.COLOR_BGR2RGB) * dim).astype(np.uint8)
+        r = max(2, int(round(h / 300)))
+        vis = visualize_keypoints(
+            image=rgb, keypoints=kpts, keypoints_visible=[np.ones_like(s) > 0 for s in scores],
+            keypoint_scores=scores, radius=r, thickness=max(1, r // 2), kpt_thr=0.3,
+            skeleton=meta["skeleton_links"], kpt_color=meta["keypoint_colors"],
+            link_color=meta["skeleton_link_colors"],
+        )
+        ok, png = cv2.imencode(".png", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
+        return png.tobytes()
+
+
+@app.local_entrypoint()
+def pose_photo(image: str, dim: float = 0.7):
+    """python3 -m modal run backend/modal_app.py::pose_photo --image ~/Downloads/photo.png
+    Saves photo_pose.png next to the original."""
+    src = Path(image).expanduser()
+    out = Analyzer().pose_photo.remote(src.read_bytes(), dim)
+    dest = src.with_name(src.stem + "_pose.png")
+    dest.write_bytes(out)
+    print("Saved", dest)
+
+
 # ---------------------------------------------------------------- calibration helper
 
 calib_volume = modal.Volume.from_name("origin-calibration-videos", create_if_missing=True)
