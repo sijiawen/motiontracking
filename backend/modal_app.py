@@ -687,6 +687,109 @@ class Analyzer:
         return png.tobytes()
 
 
+    @modal.method()
+    def compare_photos(self, a_bytes: bytes, b_bytes: bytes, label_a: str = "Original",
+                       label_b: str = "Suspected copy") -> dict:
+        """Compare one frame from each video (e.g. screenshots of the original and
+        of the ad). Returns posture and background similarity plus a side-by-side
+        card (PNG bytes) with skeletons drawn and the scores written underneath."""
+        import cv2
+        import numpy as np
+        from PIL import Image, ImageDraw, ImageFont
+        from pose_render_utils import visualize_keypoints
+
+        import content
+        import similarity
+
+        imgs = []
+        for b in (a_bytes, b_bytes):
+            im = cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_COLOR)
+            if im is None:
+                raise ValueError("Couldn't read one of the images.")
+            imgs.append(im)
+        det = self._detect(imgs)
+        if min(c for _, c in det) < 0.5:
+            raise ValueError("Couldn't find a person clearly in both images.")
+        kpts, scores = self._pose(imgs, [b for b, _ in det])
+        mattes = [m[3] for m in self._dense("matting", imgs)]
+
+        # posture: same features and maths as the video test, for one frame each
+        bi = self.body_idx
+        A = {"kpts": kpts[0][bi][None], "kpt_scores": scores[0][bi][None]}
+        B = {"kpts": kpts[1][bi][None], "kpt_scores": scores[1][bi][None]}
+        posture = float(similarity.sim_pose(A, B)[0, 0])
+
+        # background: person blanked out, compared patch by patch (scene test)
+        h, w = imgs[0].shape[:2]
+        sc = 392 / max(h, w)
+        size = (max(14, int(round(h * sc / 14)) * 14), max(14, int(round(w * sc / 14)) * 14))
+        _, patch = self._embed(imgs, size)
+        grid = patch.shape[1:3]
+        masks = [content.patch_person_mask(m, grid) for m in mattes]
+        bg_raw = content.background_similarity(patch[0].astype(np.float32), masks[0],
+                                               patch[1].astype(np.float32), masks[1])
+        calib = similarity.load_calibration()  # same scale as the site
+        background = content.to_scale(bg_raw, content.anchors(calib, "scene")) if bg_raw is not None else None
+
+        # card
+        meta = self.models["pose"].pose_metainfo
+        H = 720
+        panels = []
+        for im, k, s_ in zip(imgs, kpts, scores):
+            rgb = (cv2.cvtColor(im, cv2.COLOR_BGR2RGB) * 0.7).astype(np.uint8)
+            r = max(2, int(round(im.shape[0] / 300)))
+            vis = visualize_keypoints(
+                image=rgb, keypoints=[k], keypoints_visible=[np.ones_like(s_) > 0], keypoint_scores=[s_],
+                radius=r, thickness=max(1, r // 2), kpt_thr=0.3, skeleton=meta["skeleton_links"],
+                kpt_color=meta["keypoint_colors"], link_color=meta["skeleton_link_colors"])
+            panels.append(cv2.resize(vis, (int(vis.shape[1] * H / vis.shape[0]), H), interpolation=cv2.INTER_AREA))
+        gap, head, foot = 12, 64, 96
+        W = panels[0].shape[1] + gap + panels[1].shape[1]
+        card = Image.new("RGB", (W, head + H + foot), (247, 246, 242))
+        card.paste(Image.fromarray(panels[0]), (0, head))
+        card.paste(Image.fromarray(panels[1]), (panels[0].shape[1] + gap, head))
+        d = ImageDraw.Draw(card)
+
+        def font(px):
+            for f in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",):
+                try:
+                    return ImageFont.truetype(f, px)
+                except Exception:
+                    pass
+            try:
+                return ImageFont.load_default(size=px)
+            except Exception:
+                return ImageFont.load_default()
+
+        f_lab, f_big = font(30), font(40)
+        d.text((20, 16), label_a, fill=(23, 32, 27), font=f_lab)
+        d.text((panels[0].shape[1] + gap + 20, 16), label_b, fill=(23, 32, 27), font=f_lab)
+        d.rectangle([0, head + H, W, head + H + foot], fill=(31, 77, 58))
+        parts = [f"Posture match {round(posture * 100)}%"]
+        if background is not None:
+            parts.append(f"Background match {round(background * 100)}%")
+        d.text((24, head + H + 26), "   ·   ".join(parts), fill=(255, 255, 255), font=f_big)
+        d.text((W - 300, head + H + 34), "compare.creatorgen.ai", fill=(200, 222, 210), font=f_lab)
+        import io
+        buf = io.BytesIO()
+        card.save(buf, "PNG")
+        return {"posture": posture, "background": background, "background_raw": bg_raw, "png": buf.getvalue()}
+
+
+@app.local_entrypoint()
+def compare_photos(a: str, b: str, label_a: str = "Original", label_b: str = "Suspected copy"):
+    """python3 -m modal run backend/modal_app.py::compare_photos --a original.png --b copy.png
+    Saves <a>_vs_<b>.png next to the first image and prints the scores."""
+    pa, pb = Path(a).expanduser(), Path(b).expanduser()
+    r = Analyzer().compare_photos.remote(pa.read_bytes(), pb.read_bytes(), label_a, label_b)
+    dest = pa.with_name(f"{pa.stem}_vs_{pb.stem}.png")
+    dest.write_bytes(r["png"])
+    print(f"Posture match: {round(r['posture'] * 100)}%")
+    if r["background"] is not None:
+        print(f"Background match: {round(r['background'] * 100)}%  (raw {r['background_raw']:.3f})")
+    print("Saved", dest)
+
+
 @app.local_entrypoint()
 def pose_photo(image: str, dim: float = 0.7):
     """python3 -m modal run backend/modal_app.py::pose_photo --image ~/Downloads/photo.png
