@@ -781,6 +781,133 @@ class Analyzer:
         return {"posture": posture, "background": background, "background_raw": bg_raw, "png": buf.getvalue()}
 
 
+    @modal.method()
+    def compare_models(self, a_bytes: bytes, b_bytes: bytes, label_a: str = "Original",
+                       label_b: str = "Suspected copy", three_d: str = "pointmap") -> dict:
+        """Run pose, body-part segmentation and a 3D model (pointmap depth, or
+        surface normals) on one frame from each video. Returns each model's
+        similarity and a card (PNG bytes): one row per model, A on the left,
+        B on the right, with the score for that row."""
+        import io
+
+        import cv2
+        import numpy as np
+        from PIL import Image, ImageDraw, ImageFont
+
+        import render
+        import similarity
+
+        imgs = []
+        for b in (a_bytes, b_bytes):
+            im = cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_COLOR)
+            if im is None:
+                raise ValueError("Couldn't read one of the images.")
+            imgs.append(im)
+        det = self._detect(imgs)
+        if min(c for _, c in det) < 0.5:
+            raise ValueError("Couldn't find a person clearly in both images.")
+        out = {t: self._dense(t, imgs) for t in ("seg", "normal", "pointmap", "matting")}
+        out["pose_kpts"], out["pose_scores"] = self._pose(imgs, [b for b, _ in det])
+
+        bi = self.body_idx
+        fps = [similarity.make_fingerprint(
+            out["pose_kpts"][i][bi], out["pose_scores"][i][bi], out["seg"][i], out["normal"][i],
+            out["pointmap"][i], out["matting"][i][3]) for i in range(2)]
+        if not all(f.valid for f in fps):
+            raise ValueError("Couldn't cut the person out clearly in both images.")
+        A = similarity.stack([fps[0]], len(bi))
+        B = similarity.stack([fps[1]], len(bi))
+        scores = {k: float(similarity.SIM_FUNCS[k](A, B)[0, 0]) for k in ("pose", "seg", three_d)}
+
+        meta = self.models["pose"].pose_metainfo
+        rows = [
+            ("pose", "Pose estimation", "308 keypoints, posture compared joint by joint"),
+            ("seg", "Body-part segmentation", "every pixel labelled by body part"),
+            (three_d, "3D depth" if three_d == "pointmap" else "3D surface",
+             "distance of every point from the camera" if three_d == "pointmap"
+             else "which way every patch of the body faces"),
+        ]
+
+        def font(px):
+            try:
+                return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", px)
+            except Exception:
+                try:
+                    return ImageFont.load_default(size=px)
+                except Exception:
+                    return ImageFont.load_default()
+
+        def font_regular(px):
+            try:
+                return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", px)
+            except Exception:
+                return font(px)
+
+        PH, gap, row_head, top, foot, pad = 460, 12, 64, 64, 80, 0
+        panels = []
+        for key, _, _ in rows:
+            pair = []
+            for i, im in enumerate(imgs):
+                v = render.VIS[key](im, out, i, meta)
+                v = cv2.cvtColor(v, cv2.COLOR_BGR2RGB)
+                pair.append(cv2.resize(v, (int(v.shape[1] * PH / v.shape[0]), PH), interpolation=cv2.INTER_AREA))
+            panels.append(pair)
+        W = panels[0][0].shape[1] + gap + panels[0][1].shape[1]
+        H = top + len(rows) * (row_head + PH) + foot
+        card = Image.new("RGB", (W, H), (247, 246, 242))
+        d = ImageDraw.Draw(card)
+        green, ink, muted = (31, 77, 58), (23, 32, 27), (107, 111, 105)
+        d.text((20, 18), label_a, fill=ink, font=font(30))
+        d.text((panels[0][0].shape[1] + gap + 20, 18), label_b, fill=ink, font=font(30))
+        y = top
+        for (key, title, sub), (pa, pb) in zip(rows, panels):
+            d.rectangle([0, y, W, y + row_head], fill=(236, 233, 225))
+            d.text((20, y + 10), title, fill=ink, font=font(28))
+            try:
+                tw = d.textlength(title, font=font(28))
+            except Exception:
+                tw = 16 * len(title)
+            d.text((20 + tw + 16, y + 18), sub, fill=muted, font=font_regular(20))
+            score = f"{round(scores[key] * 100)}% match"
+            try:
+                sw = d.textlength(score, font=font(30))
+            except Exception:
+                sw = 18 * len(score)
+            d.text((W - 24 - sw, y + 13), score, fill=green, font=font(30))
+            y += row_head
+            card.paste(Image.fromarray(pa), (0, y))
+            card.paste(Image.fromarray(pb), (pa.shape[1] + gap, y))
+            y += PH
+        d.rectangle([0, y, W, H], fill=green)
+        d.text((24, y + 22), "Creatorgen · AI can swap the face. Not the body.", fill=(255, 255, 255), font=font(30))
+        url = "creatorgen.ai"
+        try:
+            uw = d.textlength(url, font=font(28))
+        except Exception:
+            uw = 16 * len(url)
+        d.text((W - 24 - uw, y + 24), url, fill=(200, 222, 210), font=font(28))
+        buf = io.BytesIO()
+        card.save(buf, "PNG")
+        return {"scores": scores, "png": buf.getvalue()}
+
+
+@app.local_entrypoint()
+def compare_models(a: str, b: str, label_a: str = "Original", label_b: str = "Suspected copy",
+                   three_d: str = "pointmap"):
+    """python3 -m modal run backend/modal_app.py::compare_models --a original.png --b copy.png
+    Shows pose, body-part segmentation and 3D (pointmap, or --three-d normal) for both.
+    Saves <a>_models_<b>.png next to the first image."""
+    if three_d not in ("pointmap", "normal"):
+        raise SystemExit("--three-d must be pointmap or normal")
+    pa, pb = Path(a).expanduser(), Path(b).expanduser()
+    r = Analyzer().compare_models.remote(pa.read_bytes(), pb.read_bytes(), label_a, label_b, three_d)
+    dest = pa.with_name(f"{pa.stem}_models_{pb.stem}.png")
+    dest.write_bytes(r["png"])
+    for k, v in r["scores"].items():
+        print(f"{k}: {round(v * 100)}% match")
+    print("Saved", dest)
+
+
 @app.local_entrypoint()
 def compare_photos(a: str, b: str, label_a: str = "Original", label_b: str = "Suspected copy"):
     """python3 -m modal run backend/modal_app.py::compare_photos --a original.png --b copy.png
