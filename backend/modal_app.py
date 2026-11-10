@@ -956,27 +956,35 @@ class Analyzer:
         NB, NA = sim.shape
 
         if align:
-            best = sim.argmax(1)
-            off = best - np.arange(NB)
-            good = sim[np.arange(NB), best] >= 0.5
-            # carry the last good offset over frames with no clear match
-            last = int(np.median(off[good])) if good.any() else 0
-            filled = np.empty(NB, int)
-            for i in range(NB):
-                if good[i]:
-                    last = int(off[i])
-                filled[i] = last
-            w = max(1, int(round(out_fps)))  # ~1 second median filter keeps playback smooth
-            half = w // 2
-            smooth = np.array([int(np.median(filled[max(0, i - half): i + half + 1])) for i in range(NB)])
-            a_idx = np.clip(np.arange(NB) + smooth, 0, NA - 1)
+            # Find runs where a stretch of B matches a stretch of A in time order
+            # (the same section-finder the site uses), on a 5 fps grid to keep it
+            # fast, then play A along each run. B frames outside every run have
+            # no matching moment in A and are shown as such.
+            st = max(1, int(round(out_fps / 5)))
+            S = sim[::st, ::st].T  # (A, B) on the coarse grid
+            segs = similarity.find_segments(S, min_len=10, floor=0.6)
+            a_idx = np.full(NB, -1)
+            for g in segs:
+                for ca, cb in g["path"]:
+                    for k in range(st):
+                        ib, ia = cb * st + k, ca * st + k
+                        if ib < NB and ia < NA and a_idx[ib] < 0:
+                            a_idx[ib] = ia
+            print(f"{len(segs)} matching section(s): " + ", ".join(
+                f"B {g['path'][0][1] * st / out_fps:.1f}-{g['path'][-1][1] * st / out_fps:.1f}s <- "
+                f"A {g['path'][0][0] * st / fa:.1f}-{g['path'][-1][0] * st / fa:.1f}s ({g['mean']:.0%})"
+                for g in segs))
         else:
-            a_idx = np.minimum(np.arange(NB), NA - 1)
-        score = sim[np.arange(NB), a_idx]
-        k = max(1, int(round(out_fps / 2)))  # half-second rolling average for the on-screen number
-        shown = np.convolve(score, np.ones(k) / k, mode="same")
-        valid = pb & pa[a_idx]
-        matched = float((score[valid] >= 0.8).mean()) if valid.any() else 0.0
+            a_idx = np.where(np.arange(NB) < NA, np.arange(NB), -1)
+        matched_b = a_idx >= 0
+        score = np.where(matched_b, sim[np.arange(NB), np.clip(a_idx, 0, NA - 1)], 0.0)
+        valid = matched_b & pb & pa[np.clip(a_idx, 0, NA - 1)]
+        # half-second rolling average over matched frames only, for the on-screen number
+        k = max(1, int(round(out_fps / 2)))
+        num = np.convolve(np.where(valid, score, 0), np.ones(k), mode="same")
+        den = np.convolve(valid.astype(float), np.ones(k), mode="same")
+        shown = num / np.clip(den, 1e-6, None)
+        matched = float(valid.mean())
         mean = float(score[valid].mean()) if valid.any() else 0.0
 
         meta = self.models["pose"].pose_metainfo
@@ -1027,11 +1035,22 @@ class Analyzer:
         for i in range(NB):
             j = int(a_idx[i])
             img = Image.new("RGB", (W, H), (247, 246, 242))
-            img.paste(Image.fromarray(panel(A[j], ka[j], sa[j])), (0, top))
+            if j >= 0:
+                img.paste(Image.fromarray(panel(A[j], ka[j], sa[j])), (0, top))
+            else:
+                img.paste(Image.new("RGB", (PW, PH), (32, 36, 34)), (0, top))
             img.paste(Image.fromarray(panel(B[i], kb[i], sb[i])), (PW + gap, top))
             d = ImageDraw.Draw(img)
             d.text((18, 12), label_a, fill=ink, font=f_lab)
-            d.text((18, 44), tstamp(j, fa), fill=muted, font=f_time)
+            if j >= 0:
+                d.text((18, 44), tstamp(j, fa), fill=muted, font=f_time)
+            else:
+                msg = "No matching moment"
+                try:
+                    mw = d.textlength(msg, font=font(30))
+                except Exception:
+                    mw = 18 * len(msg)
+                d.text(((PW - mw) / 2, top + PH / 2 - 18), msg, fill=(170, 176, 172), font=font(30))
             d.text((PW + gap + 18, 12), label_b, fill=ink, font=f_lab)
             d.text((PW + gap + 18, 44), tstamp(i, out_fps), fill=muted, font=f_time)
             d.rectangle([0, top + PH, W, H], fill=green)
@@ -1051,7 +1070,7 @@ class Analyzer:
         with open(out_path, "rb") as f:
             data = f.read()
         return {"mp4": data, "frames": NB, "fps": out_fps, "mean_pose_match": mean,
-                "share_frames_over_80": matched, "aligned": align}
+                "share_matched": matched, "aligned": align}
 
 
 @app.local_entrypoint()
@@ -1064,8 +1083,8 @@ def pose_video(a: str, b: str, label_a: str = "Original", label_b: str = "Suspec
     dest = pa.with_name(f"{pa.stem}_vs_{pb.stem}_pose.mp4")
     dest.write_bytes(r["mp4"])
     print(f"{r['frames']} frames at {r['fps']:.0f} fps, aligned={r['aligned']}")
-    print(f"Average pose match: {round(r['mean_pose_match'] * 100)}%  "
-          f"(frames at 80%+: {round(r['share_frames_over_80'] * 100)}%)")
+    print(f"Matched {round(r['share_matched'] * 100)}% of the copy to the original; "
+          f"average pose match on those frames: {round(r['mean_pose_match'] * 100)}%")
     print("Saved", dest)
 
 
