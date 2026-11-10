@@ -891,6 +891,184 @@ class Analyzer:
         return {"scores": scores, "png": buf.getvalue()}
 
 
+    @modal.method()
+    def pose_video(self, a_bytes: bytes, b_bytes: bytes, label_a: str = "Original",
+                   label_b: str = "Suspected copy", align: bool = True, fps: float = 30.0) -> dict:
+        """Side-by-side video with the pose skeleton drawn on every frame of both
+        videos. B (the copy) plays in real time on the right. With align=True the
+        left panel shows the moment of A whose posture best matches each moment
+        of B (copies are often trimmed or reordered); otherwise both play from
+        0:00. A live posture-match score runs along the bottom. Returns the MP4
+        (H.264) bytes and a summary."""
+        import os
+        import subprocess
+        import tempfile
+
+        import cv2
+        import numpy as np
+        from PIL import Image, ImageDraw, ImageFont
+        from pose_render_utils import visualize_keypoints
+
+        import similarity
+
+        work = tempfile.mkdtemp()
+
+        def read(data, name):
+            path = os.path.join(work, name)
+            with open(path, "wb") as f:
+                f.write(data)
+            cap = cv2.VideoCapture(path)
+            src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            step = max(1.0, src_fps / fps)
+            frames, i, nxt = [], 0, 0.0
+            while True:
+                ok, fr = cap.read()
+                if not ok:
+                    break
+                if i >= nxt - 1e-6:
+                    frames.append(fr)
+                    nxt += step
+                i += 1
+            cap.release()
+            if not frames:
+                raise ValueError(f"Couldn't read {name}.")
+            return frames, src_fps / step
+
+        A, fa = read(a_bytes, "a.mp4")
+        B, fb = read(b_bytes, "b.mp4")
+        out_fps = fb
+        print(f"A: {len(A)} frames, B: {len(B)} frames at {out_fps:.1f} fps")
+
+        def analyse(frames):
+            det = self._detect(frames)
+            k, sc = self._pose(frames, [b for b, _ in det])
+            person = np.array([c >= 0.5 for _, c in det])
+            return k, sc, person
+
+        ka, sa, pa = analyse(A)
+        kb, sb, pb = analyse(B)
+        bi = self.body_idx
+        FA = {"kpts": np.stack([k[bi] for k in ka]), "kpt_scores": np.stack([s_[bi] for s_ in sa])}
+        FB = {"kpts": np.stack([k[bi] for k in kb]), "kpt_scores": np.stack([s_[bi] for s_ in sb])}
+        sim = similarity.sim_pose(FB, FA)  # (len(B), len(A))
+        sim[~pb, :] = 0
+        sim[:, ~pa] = 0
+        NB, NA = sim.shape
+
+        if align:
+            best = sim.argmax(1)
+            off = best - np.arange(NB)
+            good = sim[np.arange(NB), best] >= 0.5
+            # carry the last good offset over frames with no clear match
+            last = int(np.median(off[good])) if good.any() else 0
+            filled = np.empty(NB, int)
+            for i in range(NB):
+                if good[i]:
+                    last = int(off[i])
+                filled[i] = last
+            w = max(1, int(round(out_fps)))  # ~1 second median filter keeps playback smooth
+            half = w // 2
+            smooth = np.array([int(np.median(filled[max(0, i - half): i + half + 1])) for i in range(NB)])
+            a_idx = np.clip(np.arange(NB) + smooth, 0, NA - 1)
+        else:
+            a_idx = np.minimum(np.arange(NB), NA - 1)
+        score = sim[np.arange(NB), a_idx]
+        k = max(1, int(round(out_fps / 2)))  # half-second rolling average for the on-screen number
+        shown = np.convolve(score, np.ones(k) / k, mode="same")
+        valid = pb & pa[a_idx]
+        matched = float((score[valid] >= 0.8).mean()) if valid.any() else 0.0
+        mean = float(score[valid].mean()) if valid.any() else 0.0
+
+        meta = self.models["pose"].pose_metainfo
+        PW, PH, top, foot, gap = 594, 1056, 70, 110, 12
+        W, H = PW * 2 + gap, top + PH + foot
+
+        def font(px, bold=True):
+            name = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
+            try:
+                return ImageFont.truetype(f"/usr/share/fonts/truetype/dejavu/{name}", px)
+            except Exception:
+                try:
+                    return ImageFont.load_default(size=px)
+                except Exception:
+                    return ImageFont.load_default()
+
+        f_lab, f_time, f_big, f_small = font(30), font(22, False), font(40), font(24)
+        green, ink, muted = (31, 77, 58), (23, 32, 27), (107, 111, 105)
+
+        def panel(frame, kp, sc_):
+            up = 2.0
+            big = cv2.resize(frame, None, fx=up, fy=up, interpolation=cv2.INTER_CUBIC)
+            rgb = (cv2.cvtColor(big, cv2.COLOR_BGR2RGB) * 0.72).astype(np.uint8)
+            vis = visualize_keypoints(
+                image=rgb, keypoints=[kp * up], keypoints_visible=[np.ones_like(sc_) > 0],
+                keypoint_scores=[sc_], radius=4, thickness=3, kpt_thr=0.3,
+                skeleton=meta["skeleton_links"], kpt_color=meta["keypoint_colors"],
+                link_color=meta["skeleton_link_colors"])
+            # fit inside the panel, keeping the aspect ratio
+            h, w = vis.shape[:2]
+            s_ = min(PW / w, PH / h)
+            vis = cv2.resize(vis, (int(w * s_), int(h * s_)), interpolation=cv2.INTER_AREA)
+            canvas = np.full((PH, PW, 3), 20, np.uint8)
+            y0, x0 = (PH - vis.shape[0]) // 2, (PW - vis.shape[1]) // 2
+            canvas[y0:y0 + vis.shape[0], x0:x0 + vis.shape[1]] = vis
+            return canvas
+
+        def tstamp(i, f):
+            t = i / f
+            return f"{int(t // 60)}:{t % 60:04.1f}"
+
+        out_path = os.path.join(work, "out.mp4")
+        enc = subprocess.Popen(
+            ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
+             "-r", f"{out_fps:.3f}", "-i", "-", "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart", out_path],
+            stdin=subprocess.PIPE)
+        for i in range(NB):
+            j = int(a_idx[i])
+            img = Image.new("RGB", (W, H), (247, 246, 242))
+            img.paste(Image.fromarray(panel(A[j], ka[j], sa[j])), (0, top))
+            img.paste(Image.fromarray(panel(B[i], kb[i], sb[i])), (PW + gap, top))
+            d = ImageDraw.Draw(img)
+            d.text((18, 12), label_a, fill=ink, font=f_lab)
+            d.text((18, 44), tstamp(j, fa), fill=muted, font=f_time)
+            d.text((PW + gap + 18, 12), label_b, fill=ink, font=f_lab)
+            d.text((PW + gap + 18, 44), tstamp(i, out_fps), fill=muted, font=f_time)
+            d.rectangle([0, top + PH, W, H], fill=green)
+            txt = f"Pose match {round(float(shown[i]) * 100)}%" if valid[i] else "Pose match  —"
+            d.text((22, top + PH + 14), txt, fill=(255, 255, 255), font=f_big)
+            d.text((22, top + PH + 66), "308 keypoints per frame · AI can swap the face. Not the body.",
+                   fill=(200, 222, 210), font=f_small)
+            url = "creatorgen.ai"
+            try:
+                uw = d.textlength(url, font=font(30))
+            except Exception:
+                uw = 18 * len(url)
+            d.text((W - 22 - uw, top + PH + 22), url, fill=(200, 222, 210), font=font(30))
+            enc.stdin.write(np.asarray(img, np.uint8).tobytes())
+        enc.stdin.close()
+        enc.wait()
+        with open(out_path, "rb") as f:
+            data = f.read()
+        return {"mp4": data, "frames": NB, "fps": out_fps, "mean_pose_match": mean,
+                "share_frames_over_80": matched, "aligned": align}
+
+
+@app.local_entrypoint()
+def pose_video(a: str, b: str, label_a: str = "Original", label_b: str = "Suspected copy",
+               no_align: bool = False, fps: float = 30.0):
+    """python3 -m modal run backend/modal_app.py::pose_video --a original.mp4 --b copy.mp4
+    Saves <a>_vs_<b>_pose.mp4 next to the first video."""
+    pa, pb = Path(a).expanduser(), Path(b).expanduser()
+    r = Analyzer().pose_video.remote(pa.read_bytes(), pb.read_bytes(), label_a, label_b, not no_align, fps)
+    dest = pa.with_name(f"{pa.stem}_vs_{pb.stem}_pose.mp4")
+    dest.write_bytes(r["mp4"])
+    print(f"{r['frames']} frames at {r['fps']:.0f} fps, aligned={r['aligned']}")
+    print(f"Average pose match: {round(r['mean_pose_match'] * 100)}%  "
+          f"(frames at 80%+: {round(r['share_frames_over_80'] * 100)}%)")
+    print("Saved", dest)
+
+
 @app.local_entrypoint()
 def compare_models(a: str, b: str, label_a: str = "Original", label_b: str = "Suspected copy",
                    three_d: str = "pointmap"):
