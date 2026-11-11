@@ -1132,8 +1132,9 @@ def pose_video(a: str, b: str, label_a: str = "Original", label_b: str = "Suspec
     dest = pa.with_name(f"{pa.stem}_vs_{pb.stem}_pose{suffix}.mp4")
     dest.write_bytes(r["mp4"])
     print(f"{r['frames']} frames at {r['fps']:.0f} fps, aligned={r['aligned']}")
-    print(f"Matched {round(r['share_matched'] * 100)}% of the copy to the original; "
-          f"average pose match on those frames: {round(r['mean_pose_match'] * 100)}%")
+    if not no_align:
+        print(f"Matched {round(r['share_matched'] * 100)}% of the copy to the original; "
+              f"average pose match on those frames: {round(r['mean_pose_match'] * 100)}%")
     print("Saved", dest)
 
 
