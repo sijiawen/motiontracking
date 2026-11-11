@@ -2,7 +2,7 @@
   "use strict";
 
   const CFG = Object.assign(
-    { APP_NAME: "Creatorgen", API_URL: "", SUPABASE_URL: "", SUPABASE_ANON_KEY: "", MAX_SECONDS: 60, MAX_MB: 50, DAILY_LIMIT: 0 },
+    { APP_NAME: "Creatorgen", API_URL: "", SUPABASE_URL: "", SUPABASE_ANON_KEY: "", MAX_SECONDS: 90, MAX_MB: 50, DAILY_LIMIT: 0 },
     window.APP_CONFIG || {}
   );
   const params = new URLSearchParams(location.search);
@@ -159,7 +159,7 @@
     $("#hint").textContent = !both ? "Add both videos (file or link) to begin"
       : !valid ? "Fix the highlighted video or link"
       : !consent ? "Confirm you have the right to upload these"
-      : "Ready · takes about 3–5 minutes";
+      : "Ready · takes about 3–7 minutes";
     showError(null);
   }
 
@@ -741,7 +741,7 @@
       return `<div class="expired">
         <p><b>Example images for this result have been cleared</b> to save storage. The scores above are kept, and the original videos are saved.</p>
         <button class="btn-ghost" type="button" data-rerun>Regenerate images</button>
-        <span class="hint">Re-runs the comparison from the saved videos (about 3–5 minutes).</span>
+        <span class="hint">Re-runs the comparison from the saved videos (about 3–7 minutes).</span>
       </div>`;
     }
     return `<div class="examples">

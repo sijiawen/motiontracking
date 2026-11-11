@@ -30,7 +30,7 @@ SAPIENS_DIR = "/opt/sapiens2"
 CKPT_DIR = "/ckpt"  # Modal Volume with model weights
 
 SAMPLE_FPS = 2  # frames analysed per second of video
-MAX_SECONDS = 60
+MAX_SECONDS = 90
 MAX_BYTES = 50 * 1024 * 1024
 RESULT_IMAGES_DAYS = 7  # example images are deleted after this many days (videos are kept)
 BATCH = 8
@@ -168,7 +168,7 @@ def download_models():
     gpu=GPU,
     volumes={CKPT_DIR: volume},
     secrets=secrets,
-    timeout=900,
+    timeout=1500,
     scaledown_window=120,  # keep warm 2 min after a job, then stop paying
     max_containers=10,  # most comparisons that can run at the same time (launch-ready)
 )

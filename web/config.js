@@ -10,7 +10,7 @@ window.APP_CONFIG = {
   // Google Cloud -> Google Auth Platform -> Clients -> your Web client -> Client ID.
   // Public (not a secret). Leave empty to use the older redirect sign-in.
   GOOGLE_CLIENT_ID: "892932208578-0if8ncis3bnokvo2vdvitp2s1gp19vnc.apps.googleusercontent.com",
-  MAX_SECONDS: 60,
+  MAX_SECONDS: 90,
   MAX_MB: 50,
   DAILY_LIMIT: 0, // per visitor per day; 0 = unlimited (also change it in backend/modal_app.py)
 };
