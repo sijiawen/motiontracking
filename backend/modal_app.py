@@ -982,6 +982,7 @@ class Analyzer:
                 for g in segs))
         else:
             a_idx = np.where(np.arange(NB) < NA, np.arange(NB), -1)
+        plain = not align
         matched_b = a_idx >= 0
         score = np.where(matched_b, sim[np.arange(NB), np.clip(a_idx, 0, NA - 1)], 0.0)
         valid = matched_b & pb & pa[np.clip(a_idx, 0, NA - 1)]
@@ -1011,6 +1012,9 @@ class Analyzer:
         fden = np.convolve(is_fill.astype(float), np.ones(kk), mode="same")
         fshown = fnum / np.clip(fden, 1e-6, None)
         frames_out = [i for i in range(NB) if gaps != "cut" or matched_b[i]]
+        if plain:
+            # both videos play as they are from 0:00; the shorter one holds its last frame
+            frames_out = list(range(max(NA, NB)))
         if not frames_out:
             raise ValueError("No matching sections found, so there's nothing to show with gaps=cut.")
 
@@ -1059,9 +1063,11 @@ class Analyzer:
              "-r", f"{out_fps:.3f}", "-i", "-", "-c:v", "libx264", "-preset", "medium", "-crf", "20",
              "-pix_fmt", "yuv420p", "-movflags", "+faststart", out_path],
             stdin=subprocess.PIPE)
-        for i in frames_out:
-            j = int(a_idx[i])
-            fj = int(fill_idx[i])
+        for n in frames_out:
+            if plain:
+                i, j, fj = min(n, NB - 1), min(n, NA - 1), -1
+            else:
+                i, j, fj = n, int(a_idx[n]), int(fill_idx[n])
             img = Image.new("RGB", (W, H), (247, 246, 242))
             if j >= 0:
                 img.paste(Image.fromarray(panel(A[j], ka[j], sa[j])), (0, top))
@@ -1086,7 +1092,9 @@ class Analyzer:
             d.text((PW + gap + 18, 12), label_b, fill=ink, font=f_lab)
             d.text((PW + gap + 18, 44), tstamp(i, out_fps), fill=muted, font=f_time)
             d.rectangle([0, top + PH, W, H], fill=green)
-            if valid[i]:
+            if plain:
+                d.text((22, top + PH + 14), "Pose estimation", fill=(255, 255, 255), font=f_big)
+            elif valid[i]:
                 d.text((22, top + PH + 14), f"Pose match {round(float(shown[i]) * 100)}%",
                        fill=(255, 255, 255), font=f_big)
             elif fj >= 0:
@@ -1120,7 +1128,7 @@ def pose_video(a: str, b: str, label_a: str = "Original", label_b: str = "Suspec
     if gaps not in ("fill", "blank", "cut"):
         raise SystemExit("--gaps must be fill, blank or cut")
     r = Analyzer().pose_video.remote(pa.read_bytes(), pb.read_bytes(), label_a, label_b, not no_align, fps, gaps)
-    suffix = "" if gaps == "fill" else f"_{gaps}"
+    suffix = "_plain" if no_align else ("" if gaps == "fill" else f"_{gaps}")
     dest = pa.with_name(f"{pa.stem}_vs_{pb.stem}_pose{suffix}.mp4")
     dest.write_bytes(r["mp4"])
     print(f"{r['frames']} frames at {r['fps']:.0f} fps, aligned={r['aligned']}")
