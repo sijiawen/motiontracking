@@ -893,13 +893,19 @@ class Analyzer:
 
     @modal.method()
     def pose_video(self, a_bytes: bytes, b_bytes: bytes, label_a: str = "Original",
-                   label_b: str = "Suspected copy", align: bool = True, fps: float = 30.0) -> dict:
+                   label_b: str = "Suspected copy", align: bool = True, fps: float = 30.0,
+                   gaps: str = "fill") -> dict:
         """Side-by-side video with the pose skeleton drawn on every frame of both
         videos. B (the copy) plays in real time on the right. With align=True the
         left panel shows the moment of A whose posture best matches each moment
         of B (copies are often trimmed or reordered); otherwise both play from
-        0:00. A live posture-match score runs along the bottom. Returns the MP4
-        (H.264) bytes and a summary."""
+        0:00. A live posture-match score runs along the bottom.
+        gaps: what to show for moments of B with no matching section in A:
+          "fill"  - the closest-posture moment of A, labelled "Closest moment"
+                    with its real (usually lower) score, never as a match
+          "blank" - an empty panel saying "No matching moment"
+          "cut"   - leave those moments out of the video
+        Returns the MP4 (H.264) bytes and a summary."""
         import os
         import subprocess
         import tempfile
@@ -987,6 +993,27 @@ class Analyzer:
         matched = float(valid.mean())
         mean = float(score[valid].mean()) if valid.any() else 0.0
 
+        # closest moments for the gaps (shown only as "closest", never as a match)
+        fill_idx = np.full(NB, -1)
+        if gaps == "fill" and (~matched_b).any():
+            best = sim.argmax(1)
+            w = max(1, int(round(out_fps)))  # ~1 s median filter so the left side doesn't flicker
+            half = w // 2
+            off = best - np.arange(NB)
+            for i in np.where(~matched_b)[0]:
+                lo, hi = max(0, i - half), min(NB, i + half + 1)
+                cand = off[lo:hi][~matched_b[lo:hi]]
+                fill_idx[i] = int(np.clip(i + int(np.median(cand)), 0, NA - 1))
+        is_fill = fill_idx >= 0
+        fscore = np.where(is_fill, sim[np.arange(NB), np.clip(fill_idx, 0, NA - 1)], 0.0)
+        kk = max(1, int(round(out_fps / 2)))
+        fnum = np.convolve(np.where(is_fill, fscore, 0), np.ones(kk), mode="same")
+        fden = np.convolve(is_fill.astype(float), np.ones(kk), mode="same")
+        fshown = fnum / np.clip(fden, 1e-6, None)
+        frames_out = [i for i in range(NB) if gaps != "cut" or matched_b[i]]
+        if not frames_out:
+            raise ValueError("No matching sections found, so there's nothing to show with gaps=cut.")
+
         meta = self.models["pose"].pose_metainfo
         PW, PH, top, foot, gap = 594, 1056, 70, 110, 12
         W, H = PW * 2 + gap, top + PH + foot
@@ -1032,11 +1059,14 @@ class Analyzer:
              "-r", f"{out_fps:.3f}", "-i", "-", "-c:v", "libx264", "-preset", "medium", "-crf", "20",
              "-pix_fmt", "yuv420p", "-movflags", "+faststart", out_path],
             stdin=subprocess.PIPE)
-        for i in range(NB):
+        for i in frames_out:
             j = int(a_idx[i])
+            fj = int(fill_idx[i])
             img = Image.new("RGB", (W, H), (247, 246, 242))
             if j >= 0:
                 img.paste(Image.fromarray(panel(A[j], ka[j], sa[j])), (0, top))
+            elif fj >= 0:
+                img.paste(Image.fromarray(panel(A[fj], ka[fj], sa[fj])), (0, top))
             else:
                 img.paste(Image.new("RGB", (PW, PH), (32, 36, 34)), (0, top))
             img.paste(Image.fromarray(panel(B[i], kb[i], sb[i])), (PW + gap, top))
@@ -1044,6 +1074,8 @@ class Analyzer:
             d.text((18, 12), label_a, fill=ink, font=f_lab)
             if j >= 0:
                 d.text((18, 44), tstamp(j, fa), fill=muted, font=f_time)
+            elif fj >= 0:
+                d.text((18, 44), f"{tstamp(fj, fa)} · closest moment, not a match", fill=muted, font=f_time)
             else:
                 msg = "No matching moment"
                 try:
@@ -1054,8 +1086,14 @@ class Analyzer:
             d.text((PW + gap + 18, 12), label_b, fill=ink, font=f_lab)
             d.text((PW + gap + 18, 44), tstamp(i, out_fps), fill=muted, font=f_time)
             d.rectangle([0, top + PH, W, H], fill=green)
-            txt = f"Pose match {round(float(shown[i]) * 100)}%" if valid[i] else "Pose match  —"
-            d.text((22, top + PH + 14), txt, fill=(255, 255, 255), font=f_big)
+            if valid[i]:
+                d.text((22, top + PH + 14), f"Pose match {round(float(shown[i]) * 100)}%",
+                       fill=(255, 255, 255), font=f_big)
+            elif fj >= 0:
+                d.text((22, top + PH + 14), f"Closest moment {round(float(fshown[i]) * 100)}%",
+                       fill=(170, 196, 182), font=f_big)
+            else:
+                d.text((22, top + PH + 14), "Pose match  —", fill=(255, 255, 255), font=f_big)
             d.text((22, top + PH + 66), "308 keypoints per frame · AI can swap the face. Not the body.",
                    fill=(200, 222, 210), font=f_small)
             url = "creatorgen.ai"
@@ -1069,18 +1107,21 @@ class Analyzer:
         enc.wait()
         with open(out_path, "rb") as f:
             data = f.read()
-        return {"mp4": data, "frames": NB, "fps": out_fps, "mean_pose_match": mean,
-                "share_matched": matched, "aligned": align}
+        return {"mp4": data, "frames": len(frames_out), "fps": out_fps, "mean_pose_match": mean,
+                "share_matched": matched, "aligned": align, "gaps": gaps}
 
 
 @app.local_entrypoint()
 def pose_video(a: str, b: str, label_a: str = "Original", label_b: str = "Suspected copy",
-               no_align: bool = False, fps: float = 30.0):
+               no_align: bool = False, fps: float = 30.0, gaps: str = "fill"):
     """python3 -m modal run backend/modal_app.py::pose_video --a original.mp4 --b copy.mp4
     Saves <a>_vs_<b>_pose.mp4 next to the first video."""
     pa, pb = Path(a).expanduser(), Path(b).expanduser()
-    r = Analyzer().pose_video.remote(pa.read_bytes(), pb.read_bytes(), label_a, label_b, not no_align, fps)
-    dest = pa.with_name(f"{pa.stem}_vs_{pb.stem}_pose.mp4")
+    if gaps not in ("fill", "blank", "cut"):
+        raise SystemExit("--gaps must be fill, blank or cut")
+    r = Analyzer().pose_video.remote(pa.read_bytes(), pb.read_bytes(), label_a, label_b, not no_align, fps, gaps)
+    suffix = "" if gaps == "fill" else f"_{gaps}"
+    dest = pa.with_name(f"{pa.stem}_vs_{pb.stem}_pose{suffix}.mp4")
     dest.write_bytes(r["mp4"])
     print(f"{r['frames']} frames at {r['fps']:.0f} fps, aligned={r['aligned']}")
     print(f"Matched {round(r['share_matched'] * 100)}% of the copy to the original; "
