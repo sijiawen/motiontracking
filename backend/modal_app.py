@@ -971,11 +971,45 @@ class Analyzer:
             segs = similarity.find_segments(S, min_len=10, floor=0.6)
             a_idx = np.full(NB, -1)
             for g in segs:
+                # one A position per coarse B step (a path can step sideways), then
+                # interpolate so A plays smoothly between them instead of looping
+                by_b = {}
                 for ca, cb in g["path"]:
-                    for k in range(st):
-                        ib, ia = cb * st + k, ca * st + k
-                        if ib < NB and ia < NA and a_idx[ib] < 0:
-                            a_idx[ib] = ia
+                    by_b.setdefault(cb, []).append(ca)
+                cbs = np.array(sorted(by_b))
+                cas = np.array([np.mean(by_b[c]) for c in cbs])
+                fine_b = np.arange(cbs[0] * st, min(NB, (cbs[-1] + 1) * st))
+                fine_a = np.interp(fine_b, cbs * st, cas * st)
+                # keep A moving at a believable speed (0.5x-2x of B); stretches where
+                # A stalls or races are not real matches, so they're left unmatched
+                w = max(2, int(round(out_fps)))
+                speed = np.gradient(fine_a)
+                speed = np.convolve(speed, np.ones(w) / w, mode="same")
+                ok = (speed > 0.5) & (speed < 2.0)
+                for ib, ia, good in zip(fine_b, fine_a, ok):
+                    if good and ib < NB and a_idx[ib] < 0:
+                        a_idx[ib] = int(min(NA - 1, round(ia)))
+            # only keep moments whose posture really matches (1 s rolling score >= 80%)
+            if (a_idx >= 0).any():
+                sc_ = np.where(a_idx >= 0, sim[np.arange(NB), np.clip(a_idx, 0, NA - 1)], 0.0)
+                w = max(1, int(round(out_fps)))
+                m_ = (a_idx >= 0).astype(float)
+                roll = np.convolve(sc_, np.ones(w), mode="same") / np.clip(
+                    np.convolve(m_, np.ones(w), mode="same"), 1e-6, None)
+                a_idx[roll < 0.8] = -1
+                # drop leftovers shorter than 1 s so the cut doesn't flicker
+                keep = a_idx >= 0
+                i = 0
+                while i < NB:
+                    if keep[i]:
+                        j = i
+                        while j < NB and keep[j]:
+                            j += 1
+                        if j - i < w:
+                            a_idx[i:j] = -1
+                        i = j
+                    else:
+                        i += 1
             print(f"{len(segs)} matching section(s): " + ", ".join(
                 f"B {g['path'][0][1] * st / out_fps:.1f}-{g['path'][-1][1] * st / out_fps:.1f}s <- "
                 f"A {g['path'][0][0] * st / fa:.1f}-{g['path'][-1][0] * st / fa:.1f}s ({g['mean']:.0%})"
