@@ -894,7 +894,7 @@ class Analyzer:
     @modal.method()
     def pose_video(self, a_bytes: bytes, b_bytes: bytes, label_a: str = "Original",
                    label_b: str = "Suspected copy", align: bool = True, fps: float = 30.0,
-                   gaps: str = "fill") -> dict:
+                   gaps: str = "fill", show_score: bool = False, max_seconds: float = 0.0) -> dict:
         """Side-by-side video with the pose skeleton drawn on every frame of both
         videos. B (the copy) plays in real time on the right. With align=True the
         left panel shows the moment of A whose posture best matches each moment
@@ -919,6 +919,9 @@ class Analyzer:
 
         work = tempfile.mkdtemp()
 
+        # plain mode plays both from 0:00, so only the first max_seconds are needed
+        read_limit = max_seconds if (max_seconds and not align) else 0.0
+
         def read(data, name):
             path = os.path.join(work, name)
             with open(path, "wb") as f:
@@ -930,6 +933,8 @@ class Analyzer:
             while True:
                 ok, fr = cap.read()
                 if not ok:
+                    break
+                if read_limit and i / src_fps >= read_limit:
                     break
                 if i >= nxt - 1e-6:
                     frames.append(fr)
@@ -1049,6 +1054,8 @@ class Analyzer:
         if plain:
             # both videos play as they are from 0:00; the shorter one holds its last frame
             frames_out = list(range(max(NA, NB)))
+        if max_seconds:
+            frames_out = frames_out[: int(round(max_seconds * out_fps))]
         if not frames_out:
             raise ValueError("No matching sections found, so there's nothing to show with gaps=cut.")
 
@@ -1126,8 +1133,15 @@ class Analyzer:
             d.text((PW + gap + 18, 12), label_b, fill=ink, font=f_lab)
             d.text((PW + gap + 18, 44), tstamp(i, out_fps), fill=muted, font=f_time)
             d.rectangle([0, top + PH, W, H], fill=green)
-            if plain:
+            if plain and not show_score:
                 d.text((22, top + PH + 14), "Pose estimation", fill=(255, 255, 255), font=f_big)
+            elif plain:
+                # same-moment score: B at this time vs A at this time
+                if n < NA and n < NB and valid[n]:
+                    d.text((22, top + PH + 14), f"Pose match {round(float(shown[n]) * 100)}%",
+                           fill=(255, 255, 255), font=f_big)
+                else:
+                    d.text((22, top + PH + 14), "Pose match  —", fill=(255, 255, 255), font=f_big)
             elif valid[i]:
                 d.text((22, top + PH + 14), f"Pose match {round(float(shown[i]) * 100)}%",
                        fill=(255, 255, 255), font=f_big)
@@ -1155,20 +1169,22 @@ class Analyzer:
 
 @app.local_entrypoint()
 def pose_video(a: str, b: str, label_a: str = "Original", label_b: str = "Suspected copy",
-               no_align: bool = False, fps: float = 30.0, gaps: str = "fill"):
+               no_align: bool = False, fps: float = 30.0, gaps: str = "fill", score: bool = False,
+               max_seconds: float = 0.0):
     """python3 -m modal run backend/modal_app.py::pose_video --a original.mp4 --b copy.mp4
     Saves <a>_vs_<b>_pose.mp4 next to the first video."""
     pa, pb = Path(a).expanduser(), Path(b).expanduser()
     if gaps not in ("fill", "blank", "cut"):
         raise SystemExit("--gaps must be fill, blank or cut")
-    r = Analyzer().pose_video.remote(pa.read_bytes(), pb.read_bytes(), label_a, label_b, not no_align, fps, gaps)
+    r = Analyzer().pose_video.remote(pa.read_bytes(), pb.read_bytes(), label_a, label_b, not no_align, fps,
+                                     gaps, score, max_seconds)
     suffix = "_plain" if no_align else ("" if gaps == "fill" else f"_{gaps}")
     dest = pa.with_name(f"{pa.stem}_vs_{pb.stem}_pose{suffix}.mp4")
     dest.write_bytes(r["mp4"])
     print(f"{r['frames']} frames at {r['fps']:.0f} fps, aligned={r['aligned']}")
-    if not no_align:
-        print(f"Matched {round(r['share_matched'] * 100)}% of the copy to the original; "
-              f"average pose match on those frames: {round(r['mean_pose_match'] * 100)}%")
+    if not no_align or score:
+        print(f"{'Same-moment' if no_align else 'Matched'} frames: {round(r['share_matched'] * 100)}%; "
+              f"average pose match: {round(r['mean_pose_match'] * 100)}%")
     print("Saved", dest)
 
 
